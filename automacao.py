@@ -7,6 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -130,7 +131,7 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
                 ))
                 click_js(driver, btn_confirmar)
                 time.sleep(1) 
-            except: pass # As vezes não pede confirmação dependendo do item
+            except: pass 
             
         except Exception as e:
             logger.error(f"Erro ao selecionar item {nome_real}: {e}")
@@ -158,7 +159,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-extensions") 
-    chrome_options.add_argument("--window-size=1920,1080") # Tamanho maior para garantir que elementos apareçam
+    chrome_options.add_argument("--window-size=1920,1080") 
 
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 30)
@@ -175,7 +176,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         driver.switch_to.active_element.send_keys(Keys.TAB)
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
-        # 2. CADASTRO (A parte que já funciona)
+        # 2. CADASTRO
         time.sleep(3)
         logger.info(">> Navegando para Novo Paciente...")
         btn_novo_paciente = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
@@ -187,14 +188,14 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # Nome
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
-        # Gênero (JS Fix)
+        # Gênero
         try:
             sexo_formatado = paciente['sexo'].upper()[0]
             genero_select = driver.find_element(By.ID, "generoAtalho")
             driver.execute_script("arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change'));", genero_select, sexo_formatado)
         except Exception as e: logger.warning(f"Aviso Gênero: {e}")
 
-        # Data Nascimento (JS Fix)
+        # Data Nascimento
         try:
             campo_nasc = driver.find_element(By.ID, "nascimentoAtalho")
             driver.execute_script("arguments[0].value = '01/01/2000';", campo_nasc)
@@ -210,12 +211,23 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         driver.execute_script("arguments[0].click();", btn_salvar)
 
         time.sleep(3)
-        # Se botão ainda visivel, deu erro
-        if btn_salvar.is_displayed():
-             try:
-                erro_msg = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
-                raise Exception(f"Site recusou cadastro: {erro_msg}")
-             except: pass
+        
+        # --- VERIFICAÇÃO DE SUCESSO (CORREÇÃO AQUI) ---
+        try:
+            # Se tentar acessar o botão e der 'StaleElementReferenceException', é SUCESSO (botão morreu, modal fechou)
+            if btn_salvar.is_displayed():
+                 # Se o botão ainda existe E está visível, algo deu errado
+                 try:
+                    erro_msg = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
+                    raise Exception(f"Site recusou cadastro: {erro_msg}")
+                 except NoSuchElementException:
+                    # Botão está lá mas sem mensagem? Pode ser lag, vamos tentar seguir
+                    logger.warning("Modal parece aberto, mas sem erro. Tentando seguir...")
+        except StaleElementReferenceException:
+            logger.info("✅ Botão salvar desapareceu (Sucesso!), modal fechou.")
+        except NoSuchElementException:
+            logger.info("✅ Botão salvar não encontrado (Sucesso!), modal fechou.")
+        # -----------------------------------------------
 
         # 3. CAPTURA LINK
         time.sleep(3)
@@ -233,7 +245,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except:
             logger.info("Link não apareceu de imediato.")
 
-        # 4. PLANEJAMENTO ALIMENTAR (INTEGRAÇÃO DO CÓDIGO ORIGINAL)
+        # 4. PLANEJAMENTO ALIMENTAR
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             logger.info(">> Iniciando Fluxo de Planejamento...")
             
@@ -254,7 +266,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_confirmar)
             time.sleep(5) 
 
-            # Limpeza dos itens padrão (Do seu código original)
+            # Limpeza dos itens padrão
             logger.info(">> Limpando hábitos padrão...")
             for i in range(1, 4):
                 try:
@@ -267,14 +279,14 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                         time.sleep(2)
                 except: pass 
 
-            # ABRIR FAVORITOS (IMPORTANTE: Estava faltando na minha versão anterior)
+            # ABRIR FAVORITOS
             logger.info(">> Abrindo Favoritos/Refeições Prontas...")
             try:
                 btn_favoritas = wait.until(EC.element_to_be_clickable(
                     (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
                 ))
                 click_js(driver, btn_favoritas)
-                time.sleep(3) # Espera carregar a lista lateral
+                time.sleep(3) 
             except Exception as e:
                 logger.warning(f"Não consegui clicar em favoritos: {e}")
 
@@ -290,7 +302,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             # Salvar Final
             logger.info(">> Salvando Prescrição...")
             try:
-                # Fecha modal de favoritos/itens se estiver atrapalhando o botão salvar
                 btn_fechar_modal = driver.find_element(By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
                 click_js(driver, btn_fechar_modal)
             except: pass
