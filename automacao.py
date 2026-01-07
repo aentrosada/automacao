@@ -189,12 +189,12 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, btn_novo_paciente)
         
         time.sleep(2)
-        logger.info("Preenchendo formulário básico...")
+        logger.info("Preenchendo formulário básico (Obrigatórios)...")
         
         # 1. NOME
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
-        # 2. GÊNERO (COM A CORREÇÃO JS)
+        # 2. GÊNERO (JS Fix)
         try:
             logger.info("Definindo Gênero via JS...")
             sexo_formatado = paciente['sexo'].upper()[0]
@@ -209,27 +209,33 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.error(f"❌ Erro ao definir gênero: {e}")
             raise e
 
-        # 3. CONTATOS
+        # 3. DATA DE NASCIMENTO (NOVO: OBRIGATÓRIO)
+        # O padrão é id="nascimentoAtalho" seguindo a lógica dos outros campos
+        logger.info("Preenchendo Data de Nascimento (01/01/2000)...")
+        try:
+            driver.find_element(By.ID, "nascimentoAtalho").send_keys("01/01/2000")
+        except:
+            # Fallback caso o ID não seja padrão
+            driver.find_element(By.XPATH, "//input[@placeholder='Data de nascimento']").send_keys("01/01/2000")
+
+        # 4. CONTATOS
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
         
         time.sleep(1)
         
-        # 4. SALVAR
+        # 5. SALVAR
         logger.info("Clicando em Salvar Paciente...")
         driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        # Aguarda transição
+        # Aguarda transição para a tela do paciente
         time.sleep(5) 
         
-        # Pulei a Antropometria aqui (Peso/Altura) para evitar erros e seguir sua instrução
-        # de que você cola isso depois, mas mantive o Planejamento abaixo.
-
         # Captura Link (Se aparecer)
         try:
             logger.info(">> Verificando pop-ups ou link...")
-            # Tenta fechar menu lateral se aparecer
             try:
+                # Tenta fechar menu lateral se aparecer
                 btn_abrir_menu = driver.find_element(By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
                 click_js(driver, btn_abrir_menu)
                 time.sleep(2)
@@ -241,19 +247,20 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except:
             logger.info("Link não apareceu de imediato, seguindo para planejamento.")
 
-        # --- PLANEJAMENTO ALIMENTAR (RESTAURADO) ---
+        # --- PLANEJAMENTO ALIMENTAR ---
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             logger.info(">> Iniciando Fluxo de Planejamento Alimentar...")
             
             logger.info("Procurando botão 'atalhoPlanejamento'...")
-            # Aumentei o wait e o tratamento aqui
             try:
-                btn_add_planejamento = wait.until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+                # Aumentei o wait para 15s para garantir que a tela carregou
+                btn_add_planejamento = WebDriverWait(driver, 15).until(
+                    EC.element_to_be_clickable((By.ID, "atalhoPlanejamento"))
+                )
                 click_js(driver, btn_add_planejamento)
-            except:
-                logger.warning("⚠️ Botão de planejamento não encontrado. Talvez o cadastro não tenha concluído a navegação.")
-                # Tenta forçar navegação ou buscar por outro meio se necessário
-                raise Exception("Falha ao iniciar planejamento: Botão não encontrado.")
+            except Exception as e:
+                logger.error(f"⚠️ Botão de planejamento não encontrado. Erro: {e}")
+                raise Exception("Falha ao iniciar planejamento: Botão não encontrado (Provavelmente o cadastro inicial falhou).")
 
             time.sleep(2)
 
@@ -291,7 +298,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
             # Salvar Final
             logger.info(">> Tentando salvar prescrição...")
-            # Fecha modal se estiver aberto
             try:
                 btn_fechar_modal = driver.find_element(By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
                 click_js(driver, btn_fechar_modal)
