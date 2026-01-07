@@ -17,7 +17,7 @@ import uvicorn
 # ==============================================================================
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
-# --- FUNÇÃO PARA LER CREDENCIAIS (Trazida do main.py) ---
+# --- FUNÇÃO PARA LER CREDENCIAIS ---
 def ler_credenciais():
     print("--- 🔍 BUSCANDO CREDENCIAIS ---")
     # 1. Tenta pegar direto das variáveis de ambiente do Render
@@ -134,69 +134,93 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     try: requests.post(WEBHOOK_MAKE_URL, json=payload)
     except: pass
 
-# --- ROBÔ PRINCIPAL ---
+# --- ROBÔ PRINCIPAL (OTIMIZADO PARA MEMÓRIA) ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
+    print("--- 🔧 Configurando Chrome Ultra-Leve ---")
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    
+    # --- CONFIGURAÇÕES ANTI-ESTOURO DE MEMÓRIA ---
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-extensions") 
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-notifications")
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false") # 🚫 SEM IMAGENS (Essencial)
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--window-size=1280,720") 
+    # --------------------------------------------
 
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 20)
+    wait = WebDriverWait(driver, 30) # Tempo aumentado para segurança
+    
     link_app_capturado = "Link não encontrado"
 
     try:
         print(f"--- 🚀 Iniciando: {paciente.get('nome', 'Sem Nome')} ---")
         driver.get("https://pt.webdiet.com.br/login/")
+        
+        # Login
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
         driver.switch_to.active_element.send_keys(Keys.TAB)
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
+        # Cadastro
         time.sleep(3)
+        print(">> Criando ficha...")
         btn_novo_paciente = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
         click_js(driver, btn_novo_paciente)
         
-        time.sleep(1.5)
+        time.sleep(2)
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         try:
             opcao_genero = driver.find_element(By.XPATH, f"//option[@value='{paciente['sexo']}']")
             driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao_genero)
         except: pass
 
-        # SEM NASCIMENTO (REMOVIDO)
+        # SEM NASCIMENTO (Mantido removido conforme solicitado)
         
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
-        time.sleep(0.5)
+        time.sleep(1)
         driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        time.sleep(4) 
+        # Dados Clínicos
+        time.sleep(5) 
         if dados_clinicos: preencher_antropometria(driver, dados_clinicos)
 
+        # Captura Link
         try:
+            print(">> Tentando fechar menu se existir...")
             btn_abrir_menu = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")))
             click_js(driver, btn_abrir_menu)
             time.sleep(3)
         except: pass
 
         try:
+            print(">> Buscando Link...")
             elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
             link_app_capturado = elemento_link.text.strip()
+            print(f"✅ LINK CAPTURADO: {link_app_capturado}")
         except: pass
 
+        # Planejamento Alimentar
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
+            print(">> Iniciando Planejamento...")
             btn_add_planejamento = wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_add_planejamento)
-            time.sleep(1.5)
+            time.sleep(2)
+
             btn_avancar = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'avançar')]")))
             click_js(driver, btn_avancar)
-            time.sleep(1.5)
+            time.sleep(2)
+
             btn_confirmar = wait.until(EC.presence_of_element_located((By.ID, "criarPlanejamento")))
             click_js(driver, btn_confirmar)
-            time.sleep(4) 
+            time.sleep(5) 
 
+            # Limpeza
             for i in range(1, 4):
                 try:
                     btn_lixeira = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'excluir(0)')]")))
@@ -207,13 +231,19 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                     time.sleep(2)
                 except: pass 
 
+            # Seleção
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
+            
+            # Horários
+            print(">> Ajustando horários...")
             time.sleep(1)
             definir_horario(driver, "horarioRotinaTemp0", "08:00")
             definir_horario(driver, "horarioRotinaTemp1", "08:00")
             time.sleep(1)
 
+            # Salvar
+            print(">> Salvando...")
             try:
                 btn_fechar_modal = wait.until(EC.presence_of_element_located((By.XPATH, "//button[@class='close' and @data-dismiss='modal']")))
                 click_js(driver, btn_fechar_modal)
@@ -222,22 +252,25 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             time.sleep(2)
             btn_salvar_final = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_salvar_final)
-            time.sleep(0.5)
+            time.sleep(1)
             click_js(driver, btn_salvar_final)
+            print("✅ Salvo!")
             
             enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Finalizado com Sucesso")
 
         return {"status": "sucesso", "link": link_app_capturado}
 
     except Exception as e:
+        print(f"❌ Erro Fatal: {e}")
         enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
     finally:
-        time.sleep(3)
-        driver.quit()
+        # Força o fechamento imediato para liberar memória
+        try: driver.quit()
+        except: pass
 
 # ==============================================================================
-# 🚀 API UNIFICADA (AGORA DENTRO DO AUTOMACAO.PY)
+# 🚀 API UNIFICADA
 # ==============================================================================
 app = FastAPI()
 
@@ -253,7 +286,7 @@ class PedidoCadastro(BaseModel):
 
 @app.post("/cadastrar-paciente")
 def api_cadastrar_unificada(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
-    # 1. Lê as credenciais internamente (sem pedir no JSON)
+    # 1. Lê as credenciais internamente
     usuario, senha = ler_credenciais()
     
     if not usuario or not senha:
