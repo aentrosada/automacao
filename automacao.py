@@ -15,13 +15,13 @@ from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 📝 CONFIGURAÇÃO DE LOGS (CRUCIAL PARA DEBUG)
+# 📝 CONFIGURAÇÃO DE LOGS
 # ==============================================================================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler() # Garante que saia no console do Render/Terminal
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -146,6 +146,7 @@ def preencher_antropometria(driver, dados):
         valor = dados.get(campo)
         if valor and str(valor).strip() != "" and str(valor) != "0":
             try:
+                # Procura elemento, se não achar segue o fluxo sem quebrar
                 input_elem = driver.find_element(By.ID, campo)
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", input_elem)
                 input_elem.clear()
@@ -153,7 +154,8 @@ def preencher_antropometria(driver, dados):
                 logger.info(f"   > Preenchido {campo}: {valor}")
                 time.sleep(0.5)
             except Exception as e:
-                logger.warning(f"Não foi possível preencher {campo}: {e}")
+                # Apenas loga warning, pois pode ser que a página não carregou esses campos ainda
+                logger.warning(f"Não foi possível preencher {campo} (pode não existir nesta tela): {e}")
 
 def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     logger.info(f"\n📡 TENTANDO ENVIAR WEBHOOK: {status_msg}")
@@ -207,48 +209,43 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, btn_novo_paciente)
         
         time.sleep(2)
-        logger.info("Preenchendo formulário básico...")
-        wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
-        # --- BLOCO CORRIGIDO DE SELEÇÃO DE GÊNERO ---
-        try:
-            # 1. Normaliza a entrada (m -> Masculino, f -> Feminino)
-            sexo_input = paciente['sexo'].lower().strip()
-            texto_visivel = "Masculino" if "m" in sexo_input else "Feminino"
-            
-            logger.info(f"Tentando selecionar gênero: {texto_visivel}")
-
-            # 2. Tenta encontrar o elemento SELECT (baseado no padrão de IDs do site: nomeAtalho, emailAtalho...)
-            # O ID provável é 'sexoAtalho' ou 'generoAtalho'. Vamos tentar achar o select primeiro.
-            
-            # TENTATIVA A: Clicar na opção pelo texto visível (Mais seguro que o value)
-            xpath_texto = f"//option[contains(text(), '{texto_visivel}')]"
-            opcao = driver.find_element(By.XPATH, xpath_texto)
-            opcao.click() # Tenta clique normal primeiro
-            
-            # Se o clique normal não disparar evento, força via JS
-            driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao)
-            logger.info("✅ Gênero selecionado com sucesso!")
-
-        except Exception as e:
-            logger.warning(f"⚠️ Falha na primeira tentativa de gênero ({e}). Tentando método alternativo...")
-            try:
-                # TENTATIVA B: Se falhar, tenta pelo value 'M' ou 'F' maiúsculo
-                letra = "M" if "m" in sexo_input else "F"
-                xpath_letra = f"//option[@value='{letra}']"
-                driver.find_element(By.XPATH, xpath_letra).click()
-                logger.info("✅ Gênero selecionado pela letra (M/F)!")
-            except:
-                logger.error("❌ Não foi possível selecionar o gênero. O campo ficará padrão.")
-        # ---------------------------------------------
+        logger.info("Preenchendo formulário básico do Modal...")
         
+        # 1. NOME
+        logger.info("Preenchendo Nome...")
+        wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
+        
+        # 2. GÊNERO - CORREÇÃO CRÍTICA AQUI
+        # Usa injeção de JS para burlar o erro "element not interactable"
+        try:
+            logger.info("Definindo Gênero via JS...")
+            sexo_formatado = paciente['sexo'].upper()[0] # Pega 'M' ou 'F'
+            genero_select = driver.find_element(By.ID, "generoAtalho")
+            
+            driver.execute_script("""
+                var select = arguments[0];
+                select.value = arguments[1];
+                select.dispatchEvent(new Event('change'));
+            """, genero_select, sexo_formatado)
+            
+            logger.info(f"✅ Gênero '{sexo_formatado}' definido com sucesso.")
+        except Exception as e:
+            logger.error(f"❌ Erro ao definir gênero: {e}")
+            raise e # Se falhar o gênero, melhor parar ou o cadastro falha
+
+        # 3. EMAIl e TELEFONE
+        logger.info("Preenchendo Contatos...")
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
+        
         time.sleep(1)
         
-        logger.info("Clicando em Salvar Paciente...")
-        driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
+        # 4. SALVAR DO MODAL
+        logger.info("Clicando em Salvar Paciente (Modal)...")
+        btn_salvar_modal = driver.find_element(By.ID, "novoPacienteBtnAtalho")
+        click_js(driver, btn_salvar_modal)
 
-        # Dados Clínicos
+        # Dados Clínicos (Só tenta preencher se saiu do modal e carregou a pág do paciente)
         time.sleep(5) 
         if dados_clinicos: 
             preencher_antropometria(driver, dados_clinicos)
@@ -332,10 +329,8 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
     except Exception as e:
         logger.error("❌ ERRO FATAL NA AUTOMAÇÃO!")
-        # AQUI ESTÁ O SEGREDO: IMPRIME O RASTRO COMPLETO DO ERRO
         logger.error(traceback.format_exc())
         
-        # Tenta salvar evidências (Se possível no ambiente)
         try:
             driver.save_screenshot("erro_debug.png")
             with open("erro_page_source.html", "w", encoding="utf-8") as f:
