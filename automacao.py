@@ -209,15 +209,17 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.error(f"❌ Erro ao definir gênero: {e}")
             raise e
 
-        # 3. DATA DE NASCIMENTO (AGORA SIM!)
+        # 3. DATA DE NASCIMENTO
         logger.info("Preenchendo Data de Nascimento...")
-        # Usa o ID exato fornecido: nascimentoAtalho
-        campo_nasc = driver.find_element(By.ID, "nascimentoAtalho")
-        campo_nasc.click()
-        # Envia apenas os números, pois a máscara costuma colocar as barras. 
-        # Se falhar, o script tenta o método com barras.
-        campo_nasc.send_keys("01012000") 
-        logger.info("✅ Data preenchida.")
+        # AQUI PODE SER O ERRO: Vamos tentar mandar sem barras primeiro (máscara automatica)
+        # Se não funcionar, o JS resolve.
+        try:
+            campo_nasc = driver.find_element(By.ID, "nascimentoAtalho")
+            # Força o valor via JS para não depender da máscara de digitação
+            driver.execute_script("arguments[0].value = '01/01/2000';", campo_nasc)
+            logger.info("✅ Data preenchida via JS (01/01/2000).")
+        except Exception as e:
+            logger.error(f"Erro ao preencher data: {e}")
 
         # 4. CONTATOS
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
@@ -225,18 +227,43 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         time.sleep(1)
         
-        # 5. SALVAR
+        # 5. SALVAR (COM DIAGNÓSTICO DE ERRO)
         logger.info("Clicando em Salvar Paciente...")
-        driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
+        btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
+        
+        # Usa JS Click para garantir
+        driver.execute_script("arguments[0].click();", btn_salvar)
 
-        # Aguarda transição para a tela do paciente (Significa que o cadastro deu certo)
+        # AGORA VEM O PULO DO GATO: Verificar se salvou mesmo
+        time.sleep(2)
+        try:
+            # Se o botão ainda estiver visível, o cadastro falhou (Modal aberto)
+            if btn_salvar.is_displayed():
+                logger.warning("⚠️ ALERTA: O Modal ainda está aberto! Procurando mensagens de erro...")
+                
+                # Tenta achar toast de erro ou mensagem de alerta
+                erros = driver.find_elements(By.XPATH, "//div[contains(@class, 'toast-message') or contains(@class, 'error') or contains(@style, 'color: red')]")
+                msgs_erro = [e.text for e in erros if e.text.strip() != ""]
+                
+                if msgs_erro:
+                    msg_final = " | ".join(msgs_erro)
+                    logger.error(f"❌ SITE RECUSOU CADASTRO: {msg_final}")
+                    raise Exception(f"Falha no Cadastro: {msg_final}")
+                else:
+                    logger.error("❌ Modal travado mas sem mensagem de erro visível.")
+                    raise Exception("Cadastro travou sem mensagem de erro.")
+        except Exception as e:
+            # Se o botão sumiu (StaleElementReference), é porque deu certo e mudou de tela
+            if "Falha no Cadastro" in str(e): raise e
+            pass
+
+        # Aguarda transição para a tela do paciente
         time.sleep(5) 
         
         # Captura Link (Se aparecer)
         try:
             logger.info(">> Verificando pop-ups ou link...")
             try:
-                # Tenta fechar menu lateral se aparecer
                 btn_abrir_menu = driver.find_element(By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
                 click_js(driver, btn_abrir_menu)
                 time.sleep(2)
@@ -254,15 +281,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
             logger.info("Procurando botão 'atalhoPlanejamento'...")
             try:
-                # Se der erro aqui, é porque o cadastro inicial travou (data/gênero errados)
-                btn_add_planejamento = WebDriverWait(driver, 15).until(
+                # Se falhar aqui, é porque o cadastro não salvou
+                btn_add_planejamento = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.ID, "atalhoPlanejamento"))
                 )
                 click_js(driver, btn_add_planejamento)
             except Exception as e:
-                logger.error(f"⚠️ Botão de planejamento não encontrado. Provavelmente travou no cadastro anterior.")
+                logger.error(f"⚠️ Botão de planejamento não encontrado. O robô provavelmente ainda está no modal de cadastro.")
                 driver.save_screenshot("erro_travamento.png")
-                raise e
+                raise Exception("Falha Crítica: Não foi possível acessar a tela de planejamento (Cadastro inicial falhou).")
 
             time.sleep(2)
 
