@@ -13,7 +13,6 @@ import uvicorn
 
 # ==============================================================================
 # 🔐 CONFIGURAÇÃO DE AMBIENTE (RENDER)
-# O link deve estar nas "Environment Variables" do Render com a chave: WEBHOOK_MAKE_URL
 # ==============================================================================
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
@@ -78,7 +77,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             time.sleep(0.5)
             click_js(driver, elem)
-            
             time.sleep(1) 
             btn_confirmar = wait.until(EC.presence_of_element_located(
                 (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'confirmar')]")
@@ -87,25 +85,16 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             time.sleep(1.5) 
         except: pass
 
-# --- NOVA FUNÇÃO: Preencher Dados Clínicos (Antropometria) ---
 def preencher_antropometria(driver, dados):
     print(">> Tentando preencher dados antropométricos...")
-    
-    # Lista de campos que tentaremos preencher pelo ID HTML
-    campos_para_preencher = [
-        "idade", "altura", "peso", "cintura", "pescoco", "quadril"
-    ]
+    campos_para_preencher = ["idade", "altura", "peso", "cintura", "pescoco", "quadril"]
 
     for campo in campos_para_preencher:
         valor = dados.get(campo)
-        # Só tenta preencher se o valor não estiver vazio e não for 0
         if valor and str(valor).strip() != "" and str(valor) != "0":
             try:
-                # Tenta encontrar o campo pelo ID (ex: id="peso")
                 input_elem = driver.find_element(By.ID, campo)
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", input_elem)
-                
-                # Limpa o campo e digita o valor
                 input_elem.clear()
                 input_elem.send_keys(str(valor))
                 print(f"   > Preenchido {campo}: {valor}")
@@ -115,9 +104,8 @@ def preencher_antropometria(driver, dados):
 
 def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     print(f"\n📡 TENTANDO ENVIAR WEBHOOK COMPLETO...")
-    
     if not WEBHOOK_MAKE_URL:
-        print("⚠️ AVISO: Variável WEBHOOK_MAKE_URL não configurada no Render. Pulei o envio.")
+        print("⚠️ AVISO: Variável WEBHOOK_MAKE_URL não configurada.")
         return
 
     payload = {
@@ -138,18 +126,14 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options = Options()
-    
-    # --- CONFIGURAÇÕES CRÍTICAS PARA O RENDER ---
-    chrome_options.add_argument("--headless") # Obrigatório: não abre janela visual
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-    # --------------------------------------------
 
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 20)
-    
     link_app_capturado = "Link não encontrado"
 
     try:
@@ -170,36 +154,32 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(1.5)
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
-        # Tenta selecionar o sexo
         try:
             opcao_genero = driver.find_element(By.XPATH, f"//option[@value='{paciente['sexo']}']")
             driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao_genero)
         except: pass
 
-        driver.find_element(By.ID, "nascimentoAtalho").send_keys(paciente["nascimento"])
+        # REMOVIDO O PREENCHIMENTO DE NASCIMENTO AQUI
+        
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
         time.sleep(0.5)
         driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        # 3. PREENCHIMENTO DOS DADOS CLÍNICOS (NOVO)
-        # Espera carregar a tela do paciente recém-criado
+        # 3. DADOS CLÍNICOS
         time.sleep(4) 
-        
         if dados_clinicos:
             preencher_antropometria(driver, dados_clinicos)
 
-        # 4. CAPTURA DO LINK DO APP
+        # 4. CAPTURA LINK
         print(">> Buscando Link do App...")
-        # Tenta fechar o modal "registrar consulta" se aparecer
         try:
             btn_abrir_menu = wait.until(EC.presence_of_element_located(
                 (By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
             ))
             click_js(driver, btn_abrir_menu)
             time.sleep(3)
-        except:
-            print("   (i) Botão de fechar modal não apareceu, seguindo...")
+        except: pass
 
         try:
             elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
@@ -208,12 +188,9 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except:
             print("⚠️ Aviso: Não consegui pegar o link nesta etapa.")
 
-        # 5. PLANEJAMENTO ALIMENTAR
-        # Só entra aqui se tiver opções de comida para marcar
+        # 5. PLANEJAMENTO
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             print(">> Iniciando Planejamento...")
-
-            # Criação
             btn_add_planejamento = wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_add_planejamento)
             time.sleep(1.5)
@@ -230,7 +207,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             print(">> Limpando padrão...")
             time.sleep(4) 
 
-            # Limpeza (tenta clicar na lixeira 3x para garantir)
             for i in range(1, 4):
                 try:
                     btn_lixeira = wait.until(EC.presence_of_element_located(
@@ -245,7 +221,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                     time.sleep(2)
                 except: pass 
 
-            # Favoritos
             try:
                 btn_favoritas = wait.until(EC.presence_of_element_located(
                     (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
@@ -254,18 +229,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 time.sleep(2.5)
             except: pass
 
-            # Seleção dos itens
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
 
-            # Horários
             print(">> Ajustando horários...")
             time.sleep(1)
             definir_horario(driver, "horarioRotinaTemp0", "08:00")
             definir_horario(driver, "horarioRotinaTemp1", "08:00")
             time.sleep(1)
 
-            # Finalizar
             print(">> Salvando...")
             try:
                 btn_fechar_modal = wait.until(EC.presence_of_element_located(
@@ -284,14 +256,12 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_salvar_final)
             print("✅ Salvo!")
 
-            # --- ENVIO FINAL (SUCESSO) ---
             enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Finalizado com Sucesso")
 
         return {"status": "sucesso", "link": link_app_capturado}
 
     except Exception as e:
         print(f"❌ Erro Fatal no Robô: {e}")
-        # driver.save_screenshot("erro_final.png") # Comentado pois no Render não dá pra ver
         enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
 
@@ -299,9 +269,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(3)
         driver.quit()
 
-# ==============================================================================
-# 🚀 SERVIDOR API (FASTAPI) - Para rodar no Render (Backup)
-# ==============================================================================
+# API
 app = FastAPI()
 
 class DadosRequest(BaseModel):
@@ -314,6 +282,5 @@ class DadosRequest(BaseModel):
 async def api_executar(dados: DadosRequest):
     return executar_cadastro(dados.usuario, dados.senha, dados.paciente, dados.dados_clinicos)
 
-# Permite rodar localmente também se der play no arquivo
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
