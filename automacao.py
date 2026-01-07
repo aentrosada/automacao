@@ -7,16 +7,44 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 import time
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
+from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 🔐 CONFIGURAÇÃO DE AMBIENTE (RENDER)
+# 🔐 CONFIGURAÇÃO DE AMBIENTE
 # ==============================================================================
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
-# Mapa de refeições
+# --- FUNÇÃO PARA LER CREDENCIAIS (Trazida do main.py) ---
+def ler_credenciais():
+    print("--- 🔍 BUSCANDO CREDENCIAIS ---")
+    # 1. Tenta pegar direto das variáveis de ambiente do Render
+    email = os.getenv("LOGIN_WEBDIET")
+    senha = os.getenv("SENHA_WEBDIET")
+    
+    if email and senha:
+        print("✅ Achei nas Variáveis de Ambiente!")
+        return email, senha
+
+    # 2. Se não achou, tenta ler arquivo local (fallback)
+    nome_arquivo = "login-web-diet.env"
+    if not os.path.exists(nome_arquivo):
+        if os.path.exists(".env"): nome_arquivo = ".env"
+        else: return None, None
+
+    try:
+        with open(nome_arquivo, "r", encoding="utf-8") as f:
+            for linha in f:
+                if "=" in linha:
+                    chave, valor = linha.strip().split("=", 1)
+                    if chave == "LOGIN_WEBDIET": email = valor
+                    elif chave == "SENHA_WEBDIET": senha = valor
+        return email, senha
+    except: return None, None
+
+# --- MAPA DE REFEIÇÕES ---
 MAPA_REFEICOES = {
     "cafe": {
         "op1": "PENDENTE", 
@@ -44,7 +72,7 @@ MAPA_REFEICOES = {
     }
 }
 
-# --- Funções Auxiliares ---
+# --- FUNÇÕES AUXILIARES ---
 def click_js(driver, elemento):
     driver.execute_script("arguments[0].click();", elemento)
 
@@ -70,7 +98,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         codigo_limpo = codigo.strip().lower()
         nome_real = MAPA_REFEICOES.get(categoria, {}).get(codigo_limpo)
         if not nome_real: continue
-
         try:
             xpath_item = f"//div[contains(text(), '{nome_real}')] | //span[contains(text(), '{nome_real}')] | //label[contains(text(), '{nome_real}')]"
             elem = driver.find_element(By.XPATH, xpath_item)
@@ -88,7 +115,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
 def preencher_antropometria(driver, dados):
     print(">> Tentando preencher dados antropométricos...")
     campos_para_preencher = ["idade", "altura", "peso", "cintura", "pescoco", "quadril"]
-
     for campo in campos_para_preencher:
         valor = dados.get(campo)
         if valor and str(valor).strip() != "" and str(valor) != "0":
@@ -99,31 +125,16 @@ def preencher_antropometria(driver, dados):
                 input_elem.send_keys(str(valor))
                 print(f"   > Preenchido {campo}: {valor}")
                 time.sleep(0.5)
-            except:
-                print(f"   (i) Campo '{campo}' não encontrado na tela atual.")
+            except: pass
 
 def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     print(f"\n📡 TENTANDO ENVIAR WEBHOOK COMPLETO...")
-    if not WEBHOOK_MAKE_URL:
-        print("⚠️ AVISO: Variável WEBHOOK_MAKE_URL não configurada.")
-        return
+    if not WEBHOOK_MAKE_URL: return
+    payload = {"status": status_msg, "link_app": link_app, "paciente": paciente_dados, "dados_clinicos": dados_clinicos}
+    try: requests.post(WEBHOOK_MAKE_URL, json=payload)
+    except: pass
 
-    payload = {
-        "status": status_msg,
-        "link_app": link_app,
-        "paciente": paciente_dados,
-        "dados_clinicos": dados_clinicos
-    }
-
-    try:
-        response = requests.post(WEBHOOK_MAKE_URL, json=payload)
-        if response.status_code == 200:
-            print("✅ WEBHOOK ENVIADO COM SUCESSO!")
-        else:
-            print(f"⚠️ Make respondeu com erro: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Erro de conexão ao enviar webhook: {e}")
-
+# --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -138,45 +149,34 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
     try:
         print(f"--- 🚀 Iniciando: {paciente.get('nome', 'Sem Nome')} ---")
-        
-        # 1. LOGIN
         driver.get("https://pt.webdiet.com.br/login/")
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
         driver.switch_to.active_element.send_keys(Keys.TAB)
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
-        # 2. CADASTRO BÁSICO
         time.sleep(3)
-        print(">> Criando ficha...")
         btn_novo_paciente = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
         click_js(driver, btn_novo_paciente)
         
         time.sleep(1.5)
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
-        
         try:
             opcao_genero = driver.find_element(By.XPATH, f"//option[@value='{paciente['sexo']}']")
             driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao_genero)
         except: pass
 
-        # REMOVIDO O PREENCHIMENTO DE NASCIMENTO AQUI
+        # SEM NASCIMENTO (REMOVIDO)
         
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
         time.sleep(0.5)
         driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        # 3. DADOS CLÍNICOS
         time.sleep(4) 
-        if dados_clinicos:
-            preencher_antropometria(driver, dados_clinicos)
+        if dados_clinicos: preencher_antropometria(driver, dados_clinicos)
 
-        # 4. CAPTURA LINK
-        print(">> Buscando Link do App...")
         try:
-            btn_abrir_menu = wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
-            ))
+            btn_abrir_menu = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")))
             click_js(driver, btn_abrir_menu)
             time.sleep(3)
         except: pass
@@ -184,103 +184,91 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         try:
             elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
             link_app_capturado = elemento_link.text.strip()
-            print(f"✅ LINK CAPTURADO: {link_app_capturado}")
-        except:
-            print("⚠️ Aviso: Não consegui pegar o link nesta etapa.")
+        except: pass
 
-        # 5. PLANEJAMENTO
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
-            print(">> Iniciando Planejamento...")
             btn_add_planejamento = wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_add_planejamento)
             time.sleep(1.5)
-
-            btn_avancar = wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'avançar')]")
-            ))
+            btn_avancar = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'avançar')]")))
             click_js(driver, btn_avancar)
             time.sleep(1.5)
-
             btn_confirmar = wait.until(EC.presence_of_element_located((By.ID, "criarPlanejamento")))
             click_js(driver, btn_confirmar)
-
-            print(">> Limpando padrão...")
             time.sleep(4) 
 
             for i in range(1, 4):
                 try:
-                    btn_lixeira = wait.until(EC.presence_of_element_located(
-                        (By.XPATH, "//div[contains(@onclick, 'excluir(0)')]")
-                    ))
+                    btn_lixeira = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'excluir(0)')]")))
                     click_js(driver, btn_lixeira)
                     time.sleep(1)
-                    btn_remover_habito = wait.until(EC.presence_of_element_located(
-                        (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'remover hábito')]")
-                    ))
+                    btn_remover_habito = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'remover hábito')]")))
                     click_js(driver, btn_remover_habito)
                     time.sleep(2)
                 except: pass 
 
-            try:
-                btn_favoritas = wait.until(EC.presence_of_element_located(
-                    (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
-                ))
-                click_js(driver, btn_favoritas)
-                time.sleep(2.5)
-            except: pass
-
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
-
-            print(">> Ajustando horários...")
             time.sleep(1)
             definir_horario(driver, "horarioRotinaTemp0", "08:00")
             definir_horario(driver, "horarioRotinaTemp1", "08:00")
             time.sleep(1)
 
-            print(">> Salvando...")
             try:
-                btn_fechar_modal = wait.until(EC.presence_of_element_located(
-                    (By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
-                ))
+                btn_fechar_modal = wait.until(EC.presence_of_element_located((By.XPATH, "//button[@class='close' and @data-dismiss='modal']")))
                 click_js(driver, btn_fechar_modal)
             except: pass
             
             time.sleep(2)
-
-            btn_salvar_final = wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")
-            ))
+            btn_salvar_final = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_salvar_final)
             time.sleep(0.5)
             click_js(driver, btn_salvar_final)
-            print("✅ Salvo!")
-
+            
             enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Finalizado com Sucesso")
 
         return {"status": "sucesso", "link": link_app_capturado}
 
     except Exception as e:
-        print(f"❌ Erro Fatal no Robô: {e}")
         enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
-
     finally:
         time.sleep(3)
         driver.quit()
 
-# API
+# ==============================================================================
+# 🚀 API UNIFICADA (AGORA DENTRO DO AUTOMACAO.PY)
+# ==============================================================================
 app = FastAPI()
 
-class DadosRequest(BaseModel):
-    usuario: str
-    senha: str
-    paciente: dict
-    dados_clinicos: dict
+class DadosPaciente(BaseModel):
+    nome: str
+    sexo: str
+    email: str
+    telefone: str
 
-@app.post("/executar")
-async def api_executar(dados: DadosRequest):
-    return executar_cadastro(dados.usuario, dados.senha, dados.paciente, dados.dados_clinicos)
+class PedidoCadastro(BaseModel):
+    paciente: DadosPaciente
+    dados_clinicos: Optional[Dict[str, Any]] = {}
+
+@app.post("/cadastrar-paciente")
+def api_cadastrar_unificada(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
+    # 1. Lê as credenciais internamente (sem pedir no JSON)
+    usuario, senha = ler_credenciais()
+    
+    if not usuario or not senha:
+        raise HTTPException(status_code=500, detail="Credenciais do WebDiet não configuradas no Render.")
+
+    # 2. Manda rodar o robô
+    background_tasks.add_task(
+        executar_cadastro, 
+        usuario, 
+        senha, 
+        pedido.paciente.dict(),
+        pedido.dados_clinicos
+    )
+
+    return {"mensagem": "Processando...", "paciente": pedido.paciente.nome}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
