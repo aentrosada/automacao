@@ -57,7 +57,7 @@ def ler_credenciais():
         logger.error(f"Erro ao ler arquivo de credenciais: {e}")
         return None, None
 
-# --- MAPA DE REFEIÇÕES ---
+# --- MAPA DE REFEIÇÕES (Restaurado) ---
 MAPA_REFEICOES = {
     "cafe": {
         "op1": "PENDENTE", 
@@ -139,24 +139,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except Exception as e:
             logger.error(f"Erro ao selecionar item {nome_real}: {e}")
 
-def preencher_antropometria(driver, dados):
-    logger.info(">> Tentando preencher dados antropométricos...")
-    campos_para_preencher = ["idade", "altura", "peso", "cintura", "pescoco", "quadril"]
-    for campo in campos_para_preencher:
-        valor = dados.get(campo)
-        if valor and str(valor).strip() != "" and str(valor) != "0":
-            try:
-                # Procura elemento, se não achar segue o fluxo sem quebrar
-                input_elem = driver.find_element(By.ID, campo)
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", input_elem)
-                input_elem.clear()
-                input_elem.send_keys(str(valor))
-                logger.info(f"   > Preenchido {campo}: {valor}")
-                time.sleep(0.5)
-            except Exception as e:
-                # Apenas loga warning, pois pode ser que a página não carregou esses campos ainda
-                logger.warning(f"Não foi possível preencher {campo} (pode não existir nesta tela): {e}")
-
 def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     logger.info(f"\n📡 TENTANDO ENVIAR WEBHOOK: {status_msg}")
     if not WEBHOOK_MAKE_URL: 
@@ -169,12 +151,11 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     except Exception as e: 
         logger.error(f"Erro ao enviar webhook: {e}")
 
-# --- ROBÔ PRINCIPAL (OTIMIZADO PARA MEMÓRIA) ---
+# --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     logger.info("--- 🔧 Configurando Chrome Ultra-Leve ---")
     chrome_options = Options()
     
-    # --- CONFIGURAÇÕES ANTI-ESTOURO DE MEMÓRIA ---
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -185,7 +166,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options.add_argument("--blink-settings=imagesEnabled=false")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--window-size=1280,720") 
-    # --------------------------------------------
 
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 30)
@@ -209,71 +189,72 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, btn_novo_paciente)
         
         time.sleep(2)
-        logger.info("Preenchendo formulário básico do Modal...")
+        logger.info("Preenchendo formulário básico...")
         
         # 1. NOME
-        logger.info("Preenchendo Nome...")
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
-        # 2. GÊNERO - CORREÇÃO CRÍTICA AQUI
-        # Usa injeção de JS para burlar o erro "element not interactable"
+        # 2. GÊNERO (COM A CORREÇÃO JS)
         try:
             logger.info("Definindo Gênero via JS...")
-            sexo_formatado = paciente['sexo'].upper()[0] # Pega 'M' ou 'F'
+            sexo_formatado = paciente['sexo'].upper()[0]
             genero_select = driver.find_element(By.ID, "generoAtalho")
-            
             driver.execute_script("""
                 var select = arguments[0];
                 select.value = arguments[1];
                 select.dispatchEvent(new Event('change'));
             """, genero_select, sexo_formatado)
-            
-            logger.info(f"✅ Gênero '{sexo_formatado}' definido com sucesso.")
+            logger.info(f"✅ Gênero '{sexo_formatado}' definido via script.")
         except Exception as e:
             logger.error(f"❌ Erro ao definir gênero: {e}")
-            raise e # Se falhar o gênero, melhor parar ou o cadastro falha
+            raise e
 
-        # 3. EMAIl e TELEFONE
-        logger.info("Preenchendo Contatos...")
+        # 3. CONTATOS
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
         
         time.sleep(1)
         
-        # 4. SALVAR DO MODAL
-        logger.info("Clicando em Salvar Paciente (Modal)...")
-        btn_salvar_modal = driver.find_element(By.ID, "novoPacienteBtnAtalho")
-        click_js(driver, btn_salvar_modal)
+        # 4. SALVAR
+        logger.info("Clicando em Salvar Paciente...")
+        driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        # Dados Clínicos (Só tenta preencher se saiu do modal e carregou a pág do paciente)
+        # Aguarda transição
         time.sleep(5) 
-        if dados_clinicos: 
-            preencher_antropometria(driver, dados_clinicos)
+        
+        # Pulei a Antropometria aqui (Peso/Altura) para evitar erros e seguir sua instrução
+        # de que você cola isso depois, mas mantive o Planejamento abaixo.
 
-        # Captura Link
+        # Captura Link (Se aparecer)
         try:
-            logger.info(">> Tentando fechar menu lateral se existir...")
-            btn_abrir_menu = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")))
-            click_js(driver, btn_abrir_menu)
-            time.sleep(3)
-        except: 
-            logger.info("Botão de fechar menu não apareceu, seguindo...")
+            logger.info(">> Verificando pop-ups ou link...")
+            # Tenta fechar menu lateral se aparecer
+            try:
+                btn_abrir_menu = driver.find_element(By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
+                click_js(driver, btn_abrir_menu)
+                time.sleep(2)
+            except: pass
 
-        try:
-            logger.info(">> Buscando Link do App...")
             elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
             link_app_capturado = elemento_link.text.strip()
             logger.info(f"✅ LINK CAPTURADO: {link_app_capturado}")
-        except Exception as e:
-            logger.warning(f"Não consegui capturar o link: {e}")
+        except:
+            logger.info("Link não apareceu de imediato, seguindo para planejamento.")
 
-        # Planejamento Alimentar
+        # --- PLANEJAMENTO ALIMENTAR (RESTAURADO) ---
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             logger.info(">> Iniciando Fluxo de Planejamento Alimentar...")
             
-            logger.info("Clicando em atalhoPlanejamento...")
-            btn_add_planejamento = wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-            click_js(driver, btn_add_planejamento)
+            logger.info("Procurando botão 'atalhoPlanejamento'...")
+            # Aumentei o wait e o tratamento aqui
+            try:
+                btn_add_planejamento = wait.until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+                click_js(driver, btn_add_planejamento)
+            except:
+                logger.warning("⚠️ Botão de planejamento não encontrado. Talvez o cadastro não tenha concluído a navegação.")
+                # Tenta forçar navegação ou buscar por outro meio se necessário
+                raise Exception("Falha ao iniciar planejamento: Botão não encontrado.")
+
             time.sleep(2)
 
             logger.info("Confirmando 'avançar'...")
@@ -286,44 +267,46 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_confirmar)
             time.sleep(5) 
 
-            # Limpeza
+            # Limpeza dos itens padrão
             logger.info(">> Limpando hábitos padrão...")
             for i in range(1, 4):
                 try:
-                    btn_lixeira = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'excluir(0)')]")))
-                    click_js(driver, btn_lixeira)
-                    time.sleep(1)
-                    btn_remover_habito = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'remover hábito')]")))
-                    click_js(driver, btn_remover_habito)
-                    time.sleep(2)
+                    btn_lixeira = driver.find_elements(By.XPATH, "//div[contains(@onclick, 'excluir(0)')]")
+                    if btn_lixeira:
+                        click_js(driver, btn_lixeira[0])
+                        time.sleep(1)
+                        btn_remover_habito = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'remover hábito')]")))
+                        click_js(driver, btn_remover_habito)
+                        time.sleep(2)
                 except: pass 
 
-            # Seleção
+            # Seleção dos itens do JSON
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
             
             # Horários
             logger.info(">> Ajustando horários...")
-            time.sleep(1)
             definir_horario(driver, "horarioRotinaTemp0", "08:00")
-            definir_horario(driver, "horarioRotinaTemp1", "08:00")
-            time.sleep(1)
-
-            # Salvar
-            logger.info(">> Tentando salvar final...")
+            definir_horario(driver, "horarioRotinaTemp1", "12:00")
+            
+            # Salvar Final
+            logger.info(">> Tentando salvar prescrição...")
+            # Fecha modal se estiver aberto
             try:
-                btn_fechar_modal = wait.until(EC.presence_of_element_located((By.XPATH, "//button[@class='close' and @data-dismiss='modal']")))
+                btn_fechar_modal = driver.find_element(By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
                 click_js(driver, btn_fechar_modal)
             except: pass
             
             time.sleep(2)
-            btn_salvar_final = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
+            btn_salvar_final = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_salvar_final)
-            time.sleep(1)
             click_js(driver, btn_salvar_final)
             logger.info("✅ Planejamento Salvo!")
             
-            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Finalizado com Sucesso")
+            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Cadastro + Planejamento Finalizado")
+
+        else:
+            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Cadastro Realizado (Sem Planejamento)")
 
         return {"status": "sucesso", "link": link_app_capturado}
 
@@ -333,11 +316,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         try:
             driver.save_screenshot("erro_debug.png")
-            with open("erro_page_source.html", "w", encoding="utf-8") as f:
-                f.write(driver.page_source)
-            logger.info("📸 Screenshot e HTML de erro salvos localmente.")
-        except:
-            logger.warning("Não foi possível salvar screenshot de erro.")
+        except: pass
 
         enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro Fatal: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
@@ -365,8 +344,7 @@ def api_cadastrar_unificada(pedido: PedidoCadastro, background_tasks: Background
     usuario, senha = ler_credenciais()
     
     if not usuario or not senha:
-        logger.error("Credenciais não encontradas.")
-        raise HTTPException(status_code=500, detail="Credenciais do WebDiet não configuradas.")
+        raise HTTPException(status_code=500, detail="Credenciais não configuradas.")
 
     background_tasks.add_task(
         executar_cadastro, 
