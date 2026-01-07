@@ -9,7 +9,7 @@ app = FastAPI()
 class DadosPaciente(BaseModel):
     nome: str
     sexo: str
-    nascimento: str
+    # nascimento removido daqui
     email: str
     telefone: str
 
@@ -28,31 +28,22 @@ def ler_credenciais():
         print("✅ Achei nas Variáveis de Ambiente (Modo Nuvem)!")
         return email, senha
 
-    # 2. Se não achou, tenta ler o arquivo .env localmente
-    # ATENÇÃO: Verifique se o nome do seu arquivo é '.env' ou 'login-web-diet.env'
-    # Vou deixar configurado para 'login-web-diet.env' conforme seu contexto anterior.
+    # 2. Se não achou, tenta ler o arquivo local
     nome_arquivo = "login-web-diet.env"
     
     if not os.path.exists(nome_arquivo):
-        # Tenta só .env caso o usuário tenha nomeado assim
         if os.path.exists(".env"):
             nome_arquivo = ".env"
         else:
-            print(f"❌ Arquivo '{nome_arquivo}' não encontrado na pasta.")
             return None, None
 
-    print(f"📂 Lendo arquivo local: {nome_arquivo}")
     try:
         with open(nome_arquivo, "r", encoding="utf-8") as f:
             linhas = f.readlines()
             for linha in linhas:
-                # Remove espaços e quebras de linha
                 linha = linha.strip()
-                # Pula linhas vazias ou comentários
-                if not linha or linha.startswith("#"):
-                    continue
+                if not linha or linha.startswith("#"): continue
                 
-                # Procura pelo formato CHAVE=VALOR
                 if "=" in linha:
                     chave, valor = linha.split("=", 1)
                     if chave == "LOGIN_WEBDIET":
@@ -61,10 +52,8 @@ def ler_credenciais():
                         senha = valor.strip()
         
         if email and senha:
-            print(f"✅ Login carregado do arquivo: {email}")
             return email, senha
         else:
-            print("❌ Li o arquivo, mas não achei as chaves LOGIN_WEBDIET ou SENHA_WEBDIET.")
             return None, None
 
     except Exception as e:
