@@ -209,11 +209,37 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(2)
         logger.info("Preenchendo formulário básico...")
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
+        # --- BLOCO CORRIGIDO DE SELEÇÃO DE GÊNERO ---
         try:
-            opcao_genero = driver.find_element(By.XPATH, f"//option[@value='{paciente['sexo']}']")
-            driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao_genero)
+            # 1. Normaliza a entrada (m -> Masculino, f -> Feminino)
+            sexo_input = paciente['sexo'].lower().strip()
+            texto_visivel = "Masculino" if "m" in sexo_input else "Feminino"
+            
+            logger.info(f"Tentando selecionar gênero: {texto_visivel}")
+
+            # 2. Tenta encontrar o elemento SELECT (baseado no padrão de IDs do site: nomeAtalho, emailAtalho...)
+            # O ID provável é 'sexoAtalho' ou 'generoAtalho'. Vamos tentar achar o select primeiro.
+            
+            # TENTATIVA A: Clicar na opção pelo texto visível (Mais seguro que o value)
+            xpath_texto = f"//option[contains(text(), '{texto_visivel}')]"
+            opcao = driver.find_element(By.XPATH, xpath_texto)
+            opcao.click() # Tenta clique normal primeiro
+            
+            # Se o clique normal não disparar evento, força via JS
+            driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao)
+            logger.info("✅ Gênero selecionado com sucesso!")
+
         except Exception as e:
-            logger.warning(f"Erro ao selecionar gênero: {e}")
+            logger.warning(f"⚠️ Falha na primeira tentativa de gênero ({e}). Tentando método alternativo...")
+            try:
+                # TENTATIVA B: Se falhar, tenta pelo value 'M' ou 'F' maiúsculo
+                letra = "M" if "m" in sexo_input else "F"
+                xpath_letra = f"//option[@value='{letra}']"
+                driver.find_element(By.XPATH, xpath_letra).click()
+                logger.info("✅ Gênero selecionado pela letra (M/F)!")
+            except:
+                logger.error("❌ Não foi possível selecionar o gênero. O campo ficará padrão.")
+        # ---------------------------------------------
         
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
