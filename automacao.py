@@ -104,6 +104,7 @@ def definir_horario(driver, element_id, horario):
     except Exception as e:
         logger.warning(f"Erro ao definir horário: {e}")
 
+# --- FUNÇÃO DE SELEÇÃO CORRIGIDA ---
 def selecionar_itens(driver, wait, categoria, codigos_brutos):
     if not codigos_brutos: return
     logger.info(f">> Processando categoria: {categoria} com códigos: {codigos_brutos}")
@@ -117,21 +118,36 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             
         try:
             logger.info(f"Procurando item: {nome_real}")
-            xpath_item = f"//div[contains(text(), '{nome_real}')] | //span[contains(text(), '{nome_real}')] | //label[contains(text(), '{nome_real}')]"
-            elem = driver.find_element(By.XPATH, xpath_item)
+            
+            # ATUALIZADO: Busca pelo SPAN que contém o texto exato
+            # O texto pode ter espaços extras, então usamos contains
+            xpath_item = f"//span[contains(text(), '{nome_real}')]"
+            
+            # Tenta encontrar o elemento
+            elem = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.XPATH, xpath_item))
+            )
+            
+            # Scroll para garantir visibilidade
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             time.sleep(0.5)
-            click_js(driver, elem)
             
+            # Clica no SPAN (ou no pai dele se o span não for clicável, mas click_js resolve)
+            click_js(driver, elem)
+            logger.info(f"Clicado em: {nome_real}")
+            
+            # ATUALIZADO: Espera o botão CONFIRMAR do SweetAlert aparecer
             time.sleep(1) 
-            # Confirma seleção (Popup do SweetAlert)
             try:
-                btn_confirmar = WebDriverWait(driver, 3).until(EC.presence_of_element_located(
-                    (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'confirmar')]")
+                # O botão confirmar tem onclick="swal.clickConfirm()"
+                btn_confirmar = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
+                    (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()')]")
                 ))
                 click_js(driver, btn_confirmar)
-                time.sleep(1) 
-            except: pass 
+                logger.info("Confirmado.")
+                time.sleep(1.5) # Tempo para o modal fechar e a lista atualizar
+            except TimeoutException:
+                logger.warning("Botão de confirmar não apareceu (pode já ter sido selecionado).")
             
         except Exception as e:
             logger.error(f"Erro ao selecionar item {nome_real}: {e}")
@@ -212,27 +228,22 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
         time.sleep(3)
         
-        # --- VERIFICAÇÃO DE SUCESSO (CORREÇÃO AQUI) ---
+        # --- VERIFICAÇÃO DE SUCESSO ---
         try:
-            # Se tentar acessar o botão e der 'StaleElementReferenceException', é SUCESSO (botão morreu, modal fechou)
             if btn_salvar.is_displayed():
-                 # Se o botão ainda existe E está visível, algo deu errado
                  try:
                     erro_msg = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
                     raise Exception(f"Site recusou cadastro: {erro_msg}")
                  except NoSuchElementException:
-                    # Botão está lá mas sem mensagem? Pode ser lag, vamos tentar seguir
                     logger.warning("Modal parece aberto, mas sem erro. Tentando seguir...")
         except StaleElementReferenceException:
             logger.info("✅ Botão salvar desapareceu (Sucesso!), modal fechou.")
         except NoSuchElementException:
             logger.info("✅ Botão salvar não encontrado (Sucesso!), modal fechou.")
-        # -----------------------------------------------
-
+        
         # 3. CAPTURA LINK
         time.sleep(3)
         try:
-            # Tenta fechar menu lateral se aparecer
             try:
                 btn_abrir_menu = driver.find_element(By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
                 click_js(driver, btn_abrir_menu)
@@ -249,12 +260,11 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             logger.info(">> Iniciando Fluxo de Planejamento...")
             
-            # Clica no botão de atalho
             btn_add_planejamento = wait.until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_add_planejamento)
             time.sleep(2)
 
-            # Avançar (SweetAlert)
+            # Avançar
             try:
                 btn_avancar = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'avançar')]")))
                 click_js(driver, btn_avancar)
@@ -266,7 +276,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_confirmar)
             time.sleep(5) 
 
-            # Limpeza dos itens padrão
+            # Limpeza
             logger.info(">> Limpando hábitos padrão...")
             for i in range(1, 4):
                 try:
@@ -279,18 +289,19 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                         time.sleep(2)
                 except: pass 
 
-            # ABRIR FAVORITOS
+            # ATUALIZADO: ABRIR FAVORITOS
             logger.info(">> Abrindo Favoritos/Refeições Prontas...")
             try:
+                # Busca pelo texto ou pelo onclick especifico
                 btn_favoritas = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
+                    (By.XPATH, "//div[contains(@onclick, 'verRefeicoesProntas') or contains(text(), 'refeições favoritas')]")
                 ))
                 click_js(driver, btn_favoritas)
-                time.sleep(3) 
+                time.sleep(4) # Importante: tempo para carregar a lista lateral
             except Exception as e:
                 logger.warning(f"Não consegui clicar em favoritos: {e}")
 
-            # Seleção dos itens
+            # Seleção dos itens (COM A CORREÇÃO DOS SPANS)
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
             
@@ -321,7 +332,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     except Exception as e:
         logger.error("❌ ERRO FATAL NA AUTOMAÇÃO!")
         logger.error(traceback.format_exc())
-        
         enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro Fatal: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
     finally:
