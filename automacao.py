@@ -57,7 +57,7 @@ def ler_credenciais():
         logger.error(f"Erro ao ler arquivo de credenciais: {e}")
         return None, None
 
-# --- MAPA DE REFEIÇÕES (Restaurado) ---
+# --- MAPA DE REFEIÇÕES ---
 MAPA_REFEICOES = {
     "cafe": {
         "op1": "PENDENTE", 
@@ -189,7 +189,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, btn_novo_paciente)
         
         time.sleep(2)
-        logger.info("Preenchendo formulário básico (Obrigatórios)...")
+        logger.info("Preenchendo formulário básico do Modal...")
         
         # 1. NOME
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
@@ -209,14 +209,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.error(f"❌ Erro ao definir gênero: {e}")
             raise e
 
-        # 3. DATA DE NASCIMENTO (NOVO: OBRIGATÓRIO)
-        # O padrão é id="nascimentoAtalho" seguindo a lógica dos outros campos
-        logger.info("Preenchendo Data de Nascimento (01/01/2000)...")
-        try:
-            driver.find_element(By.ID, "nascimentoAtalho").send_keys("01/01/2000")
-        except:
-            # Fallback caso o ID não seja padrão
-            driver.find_element(By.XPATH, "//input[@placeholder='Data de nascimento']").send_keys("01/01/2000")
+        # 3. DATA DE NASCIMENTO (AGORA SIM!)
+        logger.info("Preenchendo Data de Nascimento...")
+        # Usa o ID exato fornecido: nascimentoAtalho
+        campo_nasc = driver.find_element(By.ID, "nascimentoAtalho")
+        campo_nasc.click()
+        # Envia apenas os números, pois a máscara costuma colocar as barras. 
+        # Se falhar, o script tenta o método com barras.
+        campo_nasc.send_keys("01012000") 
+        logger.info("✅ Data preenchida.")
 
         # 4. CONTATOS
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
@@ -228,7 +229,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         logger.info("Clicando em Salvar Paciente...")
         driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        # Aguarda transição para a tela do paciente
+        # Aguarda transição para a tela do paciente (Significa que o cadastro deu certo)
         time.sleep(5) 
         
         # Captura Link (Se aparecer)
@@ -253,14 +254,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
             logger.info("Procurando botão 'atalhoPlanejamento'...")
             try:
-                # Aumentei o wait para 15s para garantir que a tela carregou
+                # Se der erro aqui, é porque o cadastro inicial travou (data/gênero errados)
                 btn_add_planejamento = WebDriverWait(driver, 15).until(
                     EC.element_to_be_clickable((By.ID, "atalhoPlanejamento"))
                 )
                 click_js(driver, btn_add_planejamento)
             except Exception as e:
-                logger.error(f"⚠️ Botão de planejamento não encontrado. Erro: {e}")
-                raise Exception("Falha ao iniciar planejamento: Botão não encontrado (Provavelmente o cadastro inicial falhou).")
+                logger.error(f"⚠️ Botão de planejamento não encontrado. Provavelmente travou no cadastro anterior.")
+                driver.save_screenshot("erro_travamento.png")
+                raise e
 
             time.sleep(2)
 
