@@ -17,7 +17,7 @@ import uvicorn
 # ==============================================================================
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
-# Mapa de refeições (Mantido igual)
+# Mapa de refeições
 MAPA_REFEICOES = {
     "cafe": {
         "op1": "PENDENTE", 
@@ -87,11 +87,37 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             time.sleep(1.5) 
         except: pass
 
+# --- NOVA FUNÇÃO: Preencher Dados Clínicos (Antropometria) ---
+def preencher_antropometria(driver, dados):
+    print(">> Tentando preencher dados antropométricos...")
+    
+    # Lista de campos que tentaremos preencher pelo ID HTML
+    campos_para_preencher = [
+        "idade", "altura", "peso", "cintura", "pescoco", "quadril"
+    ]
+
+    for campo in campos_para_preencher:
+        valor = dados.get(campo)
+        # Só tenta preencher se o valor não estiver vazio e não for 0
+        if valor and str(valor).strip() != "" and str(valor) != "0":
+            try:
+                # Tenta encontrar o campo pelo ID (ex: id="peso")
+                input_elem = driver.find_element(By.ID, campo)
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", input_elem)
+                
+                # Limpa o campo e digita o valor
+                input_elem.clear()
+                input_elem.send_keys(str(valor))
+                print(f"   > Preenchido {campo}: {valor}")
+                time.sleep(0.5)
+            except:
+                print(f"   (i) Campo '{campo}' não encontrado na tela atual.")
+
 def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
     print(f"\n📡 TENTANDO ENVIAR WEBHOOK COMPLETO...")
     
     if not WEBHOOK_MAKE_URL:
-        print("❌ ERRO: Variável WEBHOOK_MAKE_URL não configurada no Render!")
+        print("⚠️ AVISO: Variável WEBHOOK_MAKE_URL não configurada no Render. Pulei o envio.")
         return
 
     payload = {
@@ -135,7 +161,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         driver.switch_to.active_element.send_keys(Keys.TAB)
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
-        # 2. CADASTRO
+        # 2. CADASTRO BÁSICO
         time.sleep(3)
         print(">> Criando ficha...")
         btn_novo_paciente = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
@@ -143,6 +169,8 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         time.sleep(1.5)
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
+        
+        # Tenta selecionar o sexo
         try:
             opcao_genero = driver.find_element(By.XPATH, f"//option[@value='{paciente['sexo']}']")
             driver.execute_script("arguments[0].selected = true; arguments[0].parentElement.dispatchEvent(new Event('change'));", opcao_genero)
@@ -154,27 +182,35 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(0.5)
         driver.find_element(By.ID, "novoPacienteBtnAtalho").click()
 
-        # 3. PERFIL
-        time.sleep(2)
-        print(">> Acessando perfil...")
-        btn_abrir_menu = wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
-        ))
-        click_js(driver, btn_abrir_menu)
+        # 3. PREENCHIMENTO DOS DADOS CLÍNICOS (NOVO)
+        # Espera carregar a tela do paciente recém-criado
+        time.sleep(4) 
         
-        time.sleep(3)
+        if dados_clinicos:
+            preencher_antropometria(driver, dados_clinicos)
 
-        # --- CAPTURA LINK ---
+        # 4. CAPTURA DO LINK DO APP
+        print(">> Buscando Link do App...")
+        # Tenta fechar o modal "registrar consulta" se aparecer
         try:
-            print(">> Buscando Link...")
+            btn_abrir_menu = wait.until(EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
+            ))
+            click_js(driver, btn_abrir_menu)
+            time.sleep(3)
+        except:
+            print("   (i) Botão de fechar modal não apareceu, seguindo...")
+
+        try:
             elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
             link_app_capturado = elemento_link.text.strip()
             print(f"✅ LINK CAPTURADO: {link_app_capturado}")
         except:
             print("⚠️ Aviso: Não consegui pegar o link nesta etapa.")
 
-        # 4. PLANEJAMENTO
-        if dados_clinicos:
+        # 5. PLANEJAMENTO ALIMENTAR
+        # Só entra aqui se tiver opções de comida para marcar
+        if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             print(">> Iniciando Planejamento...")
 
             # Criação
@@ -194,7 +230,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             print(">> Limpando padrão...")
             time.sleep(4) 
 
-            # Limpeza (3x)
+            # Limpeza (tenta clicar na lixeira 3x para garantir)
             for i in range(1, 4):
                 try:
                     btn_lixeira = wait.until(EC.presence_of_element_located(
@@ -210,13 +246,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 except: pass 
 
             # Favoritos
-            btn_favoritas = wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
-            ))
-            click_js(driver, btn_favoritas)
-            time.sleep(2.5) 
+            try:
+                btn_favoritas = wait.until(EC.presence_of_element_located(
+                    (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
+                ))
+                click_js(driver, btn_favoritas)
+                time.sleep(2.5)
+            except: pass
 
-            # Seleção
+            # Seleção dos itens
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
 
@@ -229,10 +267,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
             # Finalizar
             print(">> Salvando...")
-            btn_fechar_modal = wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
-            ))
-            click_js(driver, btn_fechar_modal)
+            try:
+                btn_fechar_modal = wait.until(EC.presence_of_element_located(
+                    (By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
+                ))
+                click_js(driver, btn_fechar_modal)
+            except: pass
+            
             time.sleep(2)
 
             btn_salvar_final = wait.until(EC.presence_of_element_located(
@@ -259,7 +300,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         driver.quit()
 
 # ==============================================================================
-# 🚀 SERVIDOR API (FASTAPI) - Para rodar no Render
+# 🚀 SERVIDOR API (FASTAPI) - Para rodar no Render (Backup)
 # ==============================================================================
 app = FastAPI()
 
