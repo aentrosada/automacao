@@ -140,6 +140,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options = Options()
     
     # --- CONFIGURAÇÕES ANTI-ESTOURO DE MEMÓRIA ---
+    # Estas opções são essenciais para rodar no plano grátis do Render
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -147,13 +148,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options.add_argument("--disable-extensions") 
     chrome_options.add_argument("--disable-infobars")
     chrome_options.add_argument("--disable-notifications")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false") # 🚫 SEM IMAGENS (Essencial)
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false") # 🚫 NÃO CARREGA IMAGENS (Economiza muita RAM!)
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--window-size=1280,720") 
     # --------------------------------------------
 
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 30) # Tempo aumentado para segurança
+    wait = WebDriverWait(driver, 30) # Aumentei o tempo de espera por segurança
     
     link_app_capturado = "Link não encontrado"
 
@@ -292,7 +293,7 @@ def api_cadastrar_unificada(pedido: PedidoCadastro, background_tasks: Background
     if not usuario or not senha:
         raise HTTPException(status_code=500, detail="Credenciais do WebDiet não configuradas no Render.")
 
-    # 2. Manda rodar o robô
+    # 2. Manda rodar o robô em segundo plano
     background_tasks.add_task(
         executar_cadastro, 
         usuario, 
