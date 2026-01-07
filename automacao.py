@@ -20,9 +20,7 @@ import uvicorn
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -99,8 +97,6 @@ def definir_horario(driver, element_id, horario):
             input.dispatchEvent(new Event('input'));
             input.dispatchEvent(new Event('change'));
             input.dispatchEvent(new Event('blur'));
-        }} else {{
-            console.error('Elemento {element_id} não encontrado no JS');
         }}
         """
         driver.execute_script(script)
@@ -116,9 +112,7 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         codigo_limpo = codigo.strip().lower()
         nome_real = MAPA_REFEICOES.get(categoria, {}).get(codigo_limpo)
         
-        if not nome_real: 
-            logger.warning(f"Código {codigo_limpo} não encontrado no mapa.")
-            continue
+        if not nome_real: continue
             
         try:
             logger.info(f"Procurando item: {nome_real}")
@@ -127,15 +121,17 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             time.sleep(0.5)
             click_js(driver, elem)
-            logger.info(f"Clicado em: {nome_real}")
             
             time.sleep(1) 
-            logger.info("Aguardando botão confirmar seleção...")
-            btn_confirmar = wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'confirmar')]")
-            ))
-            click_js(driver, btn_confirmar)
-            time.sleep(1.5) 
+            # Confirma seleção (Popup do SweetAlert)
+            try:
+                btn_confirmar = WebDriverWait(driver, 3).until(EC.presence_of_element_located(
+                    (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'confirmar')]")
+                ))
+                click_js(driver, btn_confirmar)
+                time.sleep(1) 
+            except: pass # As vezes não pede confirmação dependendo do item
+            
         except Exception as e:
             logger.error(f"Erro ao selecionar item {nome_real}: {e}")
 
@@ -156,16 +152,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     logger.info("--- 🔧 Configurando Chrome Ultra-Leve ---")
     chrome_options = Options()
     
+    # Configurações para Render
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-extensions") 
-    chrome_options.add_argument("--disable-infobars")
-    chrome_options.add_argument("--disable-notifications")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-    chrome_options.add_argument("--disable-software-rasterizer")
-    chrome_options.add_argument("--window-size=1280,720") 
+    chrome_options.add_argument("--window-size=1920,1080") # Tamanho maior para garantir que elementos apareçam
 
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 30)
@@ -176,93 +169,58 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         logger.info(f"--- 🚀 Iniciando fluxo para: {paciente.get('nome', 'Sem Nome')} ---")
         driver.get("https://pt.webdiet.com.br/login/")
         
-        # Login
+        # 1. LOGIN
         logger.info("Preenchendo login...")
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
         driver.switch_to.active_element.send_keys(Keys.TAB)
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
-        # Cadastro
+        # 2. CADASTRO (A parte que já funciona)
         time.sleep(3)
         logger.info(">> Navegando para Novo Paciente...")
         btn_novo_paciente = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
         click_js(driver, btn_novo_paciente)
         
         time.sleep(2)
-        logger.info("Preenchendo formulário básico do Modal...")
+        logger.info("Preenchendo formulário básico...")
         
-        # 1. NOME
+        # Nome
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
-        # 2. GÊNERO (JS Fix)
+        # Gênero (JS Fix)
         try:
-            logger.info("Definindo Gênero via JS...")
             sexo_formatado = paciente['sexo'].upper()[0]
             genero_select = driver.find_element(By.ID, "generoAtalho")
-            driver.execute_script("""
-                var select = arguments[0];
-                select.value = arguments[1];
-                select.dispatchEvent(new Event('change'));
-            """, genero_select, sexo_formatado)
-            logger.info(f"✅ Gênero '{sexo_formatado}' definido via script.")
-        except Exception as e:
-            logger.error(f"❌ Erro ao definir gênero: {e}")
-            raise e
+            driver.execute_script("arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change'));", genero_select, sexo_formatado)
+        except Exception as e: logger.warning(f"Aviso Gênero: {e}")
 
-        # 3. DATA DE NASCIMENTO
-        logger.info("Preenchendo Data de Nascimento...")
-        # AQUI PODE SER O ERRO: Vamos tentar mandar sem barras primeiro (máscara automatica)
-        # Se não funcionar, o JS resolve.
+        # Data Nascimento (JS Fix)
         try:
             campo_nasc = driver.find_element(By.ID, "nascimentoAtalho")
-            # Força o valor via JS para não depender da máscara de digitação
             driver.execute_script("arguments[0].value = '01/01/2000';", campo_nasc)
-            logger.info("✅ Data preenchida via JS (01/01/2000).")
-        except Exception as e:
-            logger.error(f"Erro ao preencher data: {e}")
+        except Exception as e: logger.warning(f"Aviso Data: {e}")
 
-        # 4. CONTATOS
+        # Contatos
         driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
         driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
         
-        time.sleep(1)
-        
-        # 5. SALVAR (COM DIAGNÓSTICO DE ERRO)
-        logger.info("Clicando em Salvar Paciente...")
+        # Salvar e Verificar Erro
+        logger.info("Clicando em Salvar...")
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
-        
-        # Usa JS Click para garantir
         driver.execute_script("arguments[0].click();", btn_salvar)
 
-        # AGORA VEM O PULO DO GATO: Verificar se salvou mesmo
-        time.sleep(2)
-        try:
-            # Se o botão ainda estiver visível, o cadastro falhou (Modal aberto)
-            if btn_salvar.is_displayed():
-                logger.warning("⚠️ ALERTA: O Modal ainda está aberto! Procurando mensagens de erro...")
-                
-                # Tenta achar toast de erro ou mensagem de alerta
-                erros = driver.find_elements(By.XPATH, "//div[contains(@class, 'toast-message') or contains(@class, 'error') or contains(@style, 'color: red')]")
-                msgs_erro = [e.text for e in erros if e.text.strip() != ""]
-                
-                if msgs_erro:
-                    msg_final = " | ".join(msgs_erro)
-                    logger.error(f"❌ SITE RECUSOU CADASTRO: {msg_final}")
-                    raise Exception(f"Falha no Cadastro: {msg_final}")
-                else:
-                    logger.error("❌ Modal travado mas sem mensagem de erro visível.")
-                    raise Exception("Cadastro travou sem mensagem de erro.")
-        except Exception as e:
-            # Se o botão sumiu (StaleElementReference), é porque deu certo e mudou de tela
-            if "Falha no Cadastro" in str(e): raise e
-            pass
+        time.sleep(3)
+        # Se botão ainda visivel, deu erro
+        if btn_salvar.is_displayed():
+             try:
+                erro_msg = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
+                raise Exception(f"Site recusou cadastro: {erro_msg}")
+             except: pass
 
-        # Aguarda transição para a tela do paciente
-        time.sleep(5) 
-        
-        # Captura Link (Se aparecer)
+        # 3. CAPTURA LINK
+        time.sleep(3)
         try:
-            logger.info(">> Verificando pop-ups ou link...")
+            # Tenta fechar menu lateral se aparecer
             try:
                 btn_abrir_menu = driver.find_element(By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
                 click_js(driver, btn_abrir_menu)
@@ -273,37 +231,30 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             link_app_capturado = elemento_link.text.strip()
             logger.info(f"✅ LINK CAPTURADO: {link_app_capturado}")
         except:
-            logger.info("Link não apareceu de imediato, seguindo para planejamento.")
+            logger.info("Link não apareceu de imediato.")
 
-        # --- PLANEJAMENTO ALIMENTAR ---
+        # 4. PLANEJAMENTO ALIMENTAR (INTEGRAÇÃO DO CÓDIGO ORIGINAL)
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
-            logger.info(">> Iniciando Fluxo de Planejamento Alimentar...")
+            logger.info(">> Iniciando Fluxo de Planejamento...")
             
-            logger.info("Procurando botão 'atalhoPlanejamento'...")
+            # Clica no botão de atalho
+            btn_add_planejamento = wait.until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+            click_js(driver, btn_add_planejamento)
+            time.sleep(2)
+
+            # Avançar (SweetAlert)
             try:
-                # Se falhar aqui, é porque o cadastro não salvou
-                btn_add_planejamento = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.ID, "atalhoPlanejamento"))
-                )
-                click_js(driver, btn_add_planejamento)
-            except Exception as e:
-                logger.error(f"⚠️ Botão de planejamento não encontrado. O robô provavelmente ainda está no modal de cadastro.")
-                driver.save_screenshot("erro_travamento.png")
-                raise Exception("Falha Crítica: Não foi possível acessar a tela de planejamento (Cadastro inicial falhou).")
+                btn_avancar = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'avançar')]")))
+                click_js(driver, btn_avancar)
+                time.sleep(2)
+            except: pass
 
-            time.sleep(2)
-
-            logger.info("Confirmando 'avançar'...")
-            btn_avancar = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()') and contains(text(), 'avançar')]")))
-            click_js(driver, btn_avancar)
-            time.sleep(2)
-
-            logger.info("Confirmando criação do planejamento...")
+            # Criar Planejamento
             btn_confirmar = wait.until(EC.presence_of_element_located((By.ID, "criarPlanejamento")))
             click_js(driver, btn_confirmar)
             time.sleep(5) 
 
-            # Limpeza dos itens padrão
+            # Limpeza dos itens padrão (Do seu código original)
             logger.info(">> Limpando hábitos padrão...")
             for i in range(1, 4):
                 try:
@@ -316,7 +267,18 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                         time.sleep(2)
                 except: pass 
 
-            # Seleção dos itens do JSON
+            # ABRIR FAVORITOS (IMPORTANTE: Estava faltando na minha versão anterior)
+            logger.info(">> Abrindo Favoritos/Refeições Prontas...")
+            try:
+                btn_favoritas = wait.until(EC.element_to_be_clickable(
+                    (By.XPATH, "//div[contains(@onclick, \"verRefeicoesProntas('')\")]")
+                ))
+                click_js(driver, btn_favoritas)
+                time.sleep(3) # Espera carregar a lista lateral
+            except Exception as e:
+                logger.warning(f"Não consegui clicar em favoritos: {e}")
+
+            # Seleção dos itens
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
             
@@ -326,20 +288,20 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             definir_horario(driver, "horarioRotinaTemp1", "12:00")
             
             # Salvar Final
-            logger.info(">> Tentando salvar prescrição...")
+            logger.info(">> Salvando Prescrição...")
             try:
+                # Fecha modal de favoritos/itens se estiver atrapalhando o botão salvar
                 btn_fechar_modal = driver.find_element(By.XPATH, "//button[@class='close' and @data-dismiss='modal']")
                 click_js(driver, btn_fechar_modal)
             except: pass
             
-            time.sleep(2)
+            time.sleep(1)
             btn_salvar_final = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_salvar_final)
             click_js(driver, btn_salvar_final)
             logger.info("✅ Planejamento Salvo!")
             
             enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Cadastro + Planejamento Finalizado")
-
         else:
             enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Cadastro Realizado (Sem Planejamento)")
 
@@ -349,10 +311,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         logger.error("❌ ERRO FATAL NA AUTOMAÇÃO!")
         logger.error(traceback.format_exc())
         
-        try:
-            driver.save_screenshot("erro_debug.png")
-        except: pass
-
         enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro Fatal: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
     finally:
