@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -34,12 +34,28 @@ def ler_credenciais():
     logger.info("--- 🔍 BUSCANDO CREDENCIAIS ---")
     email = os.getenv("LOGIN_WEBDIET")
     senha = os.getenv("SENHA_WEBDIET")
+    
     if email and senha:
-        logger.info("✅ Achei nas Variáveis de Ambiente!")
         return email, senha
-    return None, None
 
-# --- MAPA DE REFEIÇÕES ---
+    nome_arquivo = "login-web-diet.env"
+    if not os.path.exists(nome_arquivo):
+        if os.path.exists(".env"): nome_arquivo = ".env"
+        else: return None, None
+
+    try:
+        with open(nome_arquivo, "r", encoding="utf-8") as f:
+            for linha in f:
+                if "=" in linha:
+                    chave, valor = linha.strip().split("=", 1)
+                    if chave == "LOGIN_WEBDIET": email = valor
+                    elif chave == "SENHA_WEBDIET": senha = valor
+        return email, senha
+    except Exception as e:
+        logger.error(f"Erro credenciais: {e}")
+        return None, None
+
+# --- MAPA DE REFEIÇÕES (COMPLETO) ---
 MAPA_REFEICOES = {
     "cafe": {
         "op1": "PENDENTE", 
@@ -77,18 +93,16 @@ def definir_horario(driver, element_id, horario):
         var input = document.getElementById('{element_id}');
         if(input) {{
             input.value = '{horario}';
-            input.dispatchEvent(new Event('input'));
             input.dispatchEvent(new Event('change'));
             input.dispatchEvent(new Event('blur'));
         }}
         """
         driver.execute_script(script)
-    except Exception as e:
-        logger.warning(f"Erro ao definir horário: {e}")
+    except: pass
 
 def selecionar_itens(driver, wait, categoria, codigos_brutos):
     if not codigos_brutos: return
-    logger.info(f">> Processando categoria: {categoria}")
+    logger.info(f">> Selecionando {categoria}: {codigos_brutos}")
     lista_codigos = str(codigos_brutos).split(",")
     
     for codigo in lista_codigos:
@@ -97,219 +111,231 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         if not nome_real: continue
             
         try:
-            logger.info(f"Procurando item: {nome_real}")
             xpath_item = f"//span[contains(text(), '{nome_real}')]"
-            elem = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, xpath_item)))
+            elem = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, xpath_item)))
             
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
-            time.sleep(0.5)
             click_js(driver, elem)
             
-            time.sleep(1) 
+            # Confirmar seleção
             try:
-                btn_confirmar = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
-                    (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()')]")
+                btn_confirmar = WebDriverWait(driver, 2).until(EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
                 ))
                 click_js(driver, btn_confirmar)
                 time.sleep(0.5)
-            except: pass 
-        except:
+                logger.info(f"✅ Adicionado: {nome_real}")
+            except TimeoutException:
+                # Retry
+                click_js(driver, elem)
+                time.sleep(0.5)
+                try:
+                    btn_retry = driver.find_element(By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
+                    click_js(driver, btn_retry)
+                    logger.info(f"✅ Adicionado (Retry): {nome_real}")
+                except:
+                    logger.warning(f"⚠️ Falha ao confirmar: {nome_real}")
+
+        except Exception as e:
             logger.warning(f"Item não encontrado: {nome_real}")
 
 def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
-    logger.info(f"\n📡 STATUS WEBHOOK: {status_msg}")
     if not WEBHOOK_MAKE_URL: return
-    payload = {"status": status_msg, "link_app": link_app, "paciente": paciente_dados, "dados_clinicos": dados_clinicos}
-    try: requests.post(WEBHOOK_MAKE_URL, json=payload, timeout=10)
+    try: 
+        payload = {"status": status_msg, "link_app": link_app, "paciente": paciente_dados, "dados_clinicos": dados_clinicos}
+        requests.post(WEBHOOK_MAKE_URL, json=payload, timeout=5)
+        logger.info(f"Webhook enviado: {status_msg}")
     except: pass
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- 🔧 Configurando Chrome ---")
+    logger.info("--- ⚡ Iniciando Robô Corrigido ---")
+    
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new") 
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-    chrome_options.add_argument("--window-size=1920,1080") 
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.page_load_strategy = 'eager'
 
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 20)
     
     link_app_capturado = "Link não encontrado"
 
     try:
-        logger.info(f"--- 🚀 Iniciando fluxo para: {paciente.get('nome')} ---")
         driver.get("https://pt.webdiet.com.br/login/")
         
         # 1. LOGIN
-        logger.info("Preenchendo login...")
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
         driver.switch_to.active_element.send_keys(Keys.TAB)
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
-        logger.info("Aguardando login...")
-        time.sleep(5) 
+        # 2. CADASTRO
+        logger.info(">> Abrindo Novo Paciente...")
+        # Usa seletor genérico robusto
+        btn_novo = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, 'novoPaciente')]")))
+        click_js(driver, btn_novo)
         
-        logger.info(">> Forçando ida ao Painel...")
-        driver.get("https://pt.webdiet.com.br/painel/v4/")
+        time.sleep(1.5)
         
-        # --- FIX POPUPS ---
-        logger.info(">> Limpando Backdrops/Modais...")
-        driver.execute_script("""
-            var backdrops = document.querySelectorAll('.modal-backdrop');
-            backdrops.forEach(function(el) { el.parentNode.removeChild(el); });
-            var modals = document.querySelectorAll('.modal');
-            modals.forEach(function(el) { el.style.display = 'none'; });
-            document.body.classList.remove('modal-open');
-        """)
-        time.sleep(1)
-
-        # 2. CADASTRO DE PACIENTE
-        logger.info(">> Procurando botão 'adicionar paciente'...")
-        
-        seletores = [
-            "//div[contains(text(), 'adicionar paciente')]",    
-            "//div[@onclick=\"novoPaciente('index')\"]",        
-            "//div[contains(@class, 'botao') and contains(text(), 'adicionar')]" 
-        ]
-        
-        btn_encontrado = False
-        for xpath in seletores:
-            try:
-                btn = WebDriverWait(driver, 3).until(EC.presence_of_element_located((By.XPATH, xpath)))
-                logger.info(f"Botão encontrado via: {xpath}")
-                click_js(driver, btn)
-                btn_encontrado = True
-                break
-            except: continue
-            
-        if not btn_encontrado:
-            logger.warning("Botão visual falhou. Tentando Injeção JS Direta...")
-            driver.execute_script("novoPaciente('index');")
-
-        # Preenchimento do Form
-        logger.info("Preenchendo formulário...")
+        # Preenchimento
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
         try:
-            sexo = paciente['sexo'].upper()[0]
-            driver.execute_script(f"document.getElementById('generoAtalho').value = '{sexo}';")
-            driver.execute_script("document.getElementById('nascimentoAtalho').value = '01/01/2000';")
+            sexo_val = paciente['sexo'].upper()[0]
+            script_campos = f"""
+                document.getElementById('generoAtalho').value = '{sexo_val}';
+                document.getElementById('generoAtalho').dispatchEvent(new Event('change'));
+                document.getElementById('nascimentoAtalho').value = '01/01/2000';
+                document.getElementById('emailAtalho').value = '{paciente['email']}';
+                document.getElementById('telefoneAtalho').value = '{paciente['telefone']}';
+            """
+            driver.execute_script(script_campos)
         except: pass
 
-        driver.find_element(By.ID, "emailAtalho").send_keys(paciente["email"])
-        driver.find_element(By.ID, "telefoneAtalho").send_keys(paciente["telefone"])
-        
-        logger.info("Clicando em Salvar...")
+        # Salvar Paciente
+        logger.info(">> Salvando Paciente...")
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
-        time.sleep(2)
+
+        # 3. TRANSIÇÃO CRÍTICA (O CORRETOR DE ERRO)
+        logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
+        time.sleep(1.5) # Tempo para o modal aparecer
         
-        # --- CORREÇÃO PÓS-SALVAMENTO: MODAL NOVA CONSULTA ---
-        logger.info(">> Aguardando modal 'Nova Consulta'...")
+        modal_sucesso = False
         try:
-            # Espera o modal e clica em "não registrar e abrir menu"
-            btn_abrir_menu = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(
-                (By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
-            ))
-            logger.info("Botão 'Abrir Menu' encontrado! Clicando...")
-            click_js(driver, btn_abrir_menu)
-            time.sleep(3) # Tempo para carregar perfil
+            # Tenta encontrar o botão específico que você mandou: "registrar nova consulta"
+            xpath_confirmacao = "//div[contains(text(), 'registrar') and contains(text(), 'consulta')]"
+            btn_confirmar_consulta = WebDriverWait(driver, 8).until(
+                EC.element_to_be_clickable((By.XPATH, xpath_confirmacao))
+            )
+            logger.info("✅ Botão 'Registrar Nova Consulta' encontrado! Clicando...")
+            click_js(driver, btn_confirmar_consulta)
+            modal_sucesso = True
         except TimeoutException:
-            logger.warning("Modal não apareceu ou botão não encontrado. Seguindo fluxo...")
-
-        # 3. CAPTURA LINK
-        try:
-            elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
-            link_app_capturado = elemento_link.text.strip()
-            logger.info(f"✅ LINK: {link_app_capturado}")
-        except: 
-            logger.warning("Link não capturado.")
-
-        # 4. PLANEJAMENTO
-        if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
-            logger.info(">> Iniciando Planejamento...")
-            
-            # Botão Adicionar Planejamento
+            logger.warning("⚠️ Botão de texto não achado. Tentando seletor genérico swal...")
             try:
-                # Tenta pelo ID primeiro
-                btn_add_planejamento = wait.until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
-                click_js(driver, btn_add_planejamento)
+                # Tenta o botão de confirmação padrão do SweetAlert
+                btn_generico = driver.find_element(By.CSS_SELECTOR, "div.swal2-confirm, button.swal2-confirm, div[onclick*='swal.clickConfirm']")
+                click_js(driver, btn_generico)
+                logger.info("✅ Botão Genérico clicado.")
+                modal_sucesso = True
             except:
-                # Fallback pelo texto visual
-                logger.info("Tentando achar botão pelo texto...")
-                btn_alt = driver.find_element(By.XPATH, "//div[contains(text(), 'adicionar') and contains(text(), 'planejamento')]")
-                click_js(driver, btn_alt)
+                logger.error("❌ ERRO CRÍTICO: Não foi possível clicar em 'Registrar Nova Consulta'. O robô vai travar.")
 
-            time.sleep(2)
-
-            # Confirmações iniciais
-            logger.info(">> Confirmando modais iniciais...")
+        # Aguarda sair do Dashboard (mudança de URL ou carregamento do menu lateral do paciente)
+        if modal_sucesso:
             try:
-                driver.execute_script("""
-                    var btns = document.querySelectorAll("div[onclick*='swal.clickConfirm']");
-                    for(var i=0; i<btns.length; i++) { btns[i].click(); }
-                """)
+                # Espera URL sair do painel/v4 puro
+                WebDriverWait(driver, 10).until(lambda d: "/painel/v4/" not in d.current_url or "paciente" in d.current_url)
+                logger.info("✅ Redirecionamento confirmado!")
+            except: 
+                logger.warning("⚠️ URL parece não ter mudado, mas vamos tentar seguir.")
+
+        # 4. CAPTURA LINK
+        try:
+            # Tenta fechar menu lateral se existir (oculta elementos)
+            try:
+                driver.find_element(By.CSS_SELECTOR, "div[onclick*='não registrar']").click()
+            except: pass
+
+            el_link = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "linkRef")))
+            link_app_capturado = el_link.text.strip()
+            logger.info(f"✅ Link Capturado: {link_app_capturado}")
+        except: 
+            logger.warning("Link não capturado (não crítico).")
+
+        # 5. PLANEJAMENTO
+        if dados_clinicos:
+            logger.info(">> Iniciando Fluxo de Planejamento...")
+            
+            # AGORA ESTAMOS NA TELA CERTA
+            try:
+                btn_add = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+                click_js(driver, btn_add)
+            except TimeoutException:
+                # Log de debug para ver onde estamos se falhar
+                logger.error(f"❌ Falha ao achar atalhoPlanejamento. URL Atual: {driver.current_url}")
+                raise Exception("Botão de planejamento não encontrado (Verifique redirecionamento).")
+
+            time.sleep(1.5)
+
+            # Confirmações iniciais (Avançar/Criar)
+            try:
+                # Botão Avançar
+                btn_av = WebDriverWait(driver, 3).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]")))
+                click_js(driver, btn_av)
                 time.sleep(1)
-                try: driver.execute_script("document.getElementById('criarPlanejamento').click();")
-                except: pass
+                
+                # Botão Criar (ID criarPlanejamento)
+                btn_criar = driver.find_element(By.ID, "criarPlanejamento")
+                click_js(driver, btn_criar)
             except: pass
             
-            time.sleep(4) 
+            time.sleep(3) # Carregamento do planejamento
 
-            # Limpeza Turbo
-            logger.info(">> Limpando hábitos...")
-            for _ in range(3):
-                try:
-                    driver.execute_script("var trash = document.querySelector('.fi-sr-trash'); if(trash) trash.click();")
-                    time.sleep(0.5)
-                    driver.execute_script("swal.clickConfirm();")
-                    time.sleep(1)
-                except: break
-
-            # Favoritos
-            logger.info(">> Favoritos...")
+            # --- LIMPEZA ---
+            logger.info(">> Limpando hábitos padrão...")
             try:
-                driver.execute_script("window.scrollTo(0, 0);")
-                btn_fav = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'refeições favoritas')]")))
-                click_js(driver, btn_fav)
-                time.sleep(3)
-            except:
-                raise Exception("Menu Favoritos não abriu")
+                lixeiras = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
+                for _ in lixeiras:
+                    try:
+                        # Re-busca a primeira lixeira visível a cada loop para evitar StaleElement
+                        lixeira = driver.find_element(By.CSS_SELECTOR, "i.fi-sr-trash")
+                        click_js(driver, lixeira)
+                        time.sleep(0.5)
+                        confirmar = driver.find_element(By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
+                        click_js(driver, confirmar)
+                        time.sleep(1)
+                    except: break 
+            except: pass
 
+            # --- FAVORITOS ---
+            logger.info(">> Favoritos...")
+            driver.execute_script("window.scrollTo(0, 0);")
+            
+            # Abre menu favoritos
+            btn_fav = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='verRefeicoesProntas']")))
+            click_js(driver, btn_fav)
+            
+            time.sleep(3)
+            
+            # Seleção
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
             
-            logger.info(">> Horários e Salvar...")
+            # Fechar modal
+            try:
+                driver.execute_script("document.querySelector('button.close[data-dismiss=\"modal\"]').click()")
+            except:
+                driver.execute_script("document.querySelector('.modal-backdrop').click()")
+            
+            # Horários
+            logger.info(">> Ajustando horários...")
             definir_horario(driver, "horarioRotinaTemp0", "08:00")
             definir_horario(driver, "horarioRotinaTemp1", "12:00")
             
-            # Fecha modal favoritos
-            try: driver.execute_script("document.querySelector('button.close[data-dismiss=\"modal\"]').click()")
-            except: driver.execute_script("document.body.click()")
-
-            # Salvar Final
-            logger.info(">> Salvando Final...")
-            try:
-                btn_final = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao')]")))
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_final)
-                click_js(driver, btn_final)
-            except:
-                driver.execute_script("salvarPrescricao();")
+            # --- SALVAR FINAL ---
+            logger.info(">> Salvando Prescrição...")
+            time.sleep(1)
+            btn_final = driver.find_element(By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']")
+            click_js(driver, btn_final)
+            logger.info("✅ Salvo com sucesso!")
             
-            logger.info("✅ Planejamento Salvo!")
-            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Sucesso Completo")
+            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Sucesso Total")
+
         else:
-            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Sucesso (Sem Dieta)")
+            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Apenas Cadastro")
 
         return {"status": "sucesso", "link": link_app_capturado}
 
     except Exception as e:
-        logger.error(f"❌ ERRO: {traceback.format_exc()}")
-        logger.error(f"URL no erro: {driver.current_url}")
-        enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro: {str(e)}")
+        logger.error(f"❌ ERRO FATAL: {traceback.format_exc()}")
+        enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro Fatal: {str(e)}")
         return {"status": "erro", "mensagem": str(e)}
     finally:
         try: driver.quit()
@@ -331,12 +357,19 @@ class PedidoCadastro(BaseModel):
     dados_clinicos: Optional[Dict[str, Any]] = {}
 
 @app.post("/cadastrar-paciente")
-def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
-    user, pwd = ler_credenciais()
-    if not user: raise HTTPException(status_code=500, detail="Sem credenciais")
-    
-    background_tasks.add_task(executar_cadastro, user, pwd, pedido.paciente.dict(), pedido.dados_clinicos)
-    return {"msg": "Iniciado", "paciente": pedido.paciente.nome}
+def api_cadastrar_unificada(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
+    usuario, senha = ler_credenciais()
+    if not usuario or not senha:
+        raise HTTPException(status_code=500, detail="Credenciais não configuradas.")
+
+    background_tasks.add_task(
+        executar_cadastro, 
+        usuario, 
+        senha, 
+        pedido.paciente.dict(),
+        pedido.dados_clinicos
+    )
+    return {"mensagem": "Processando...", "paciente": pedido.paciente.nome}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
