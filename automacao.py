@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 📝 CONFIGURAÇÃO DE LOG
+# 📝 CONFIGURAÇÃO DE LOGS
 # ==============================================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -151,7 +151,7 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V11 (Modo Paciência) ---")
+    logger.info("--- ⚡ Iniciando Robô V11 (Modo Paciência + Low Memory) ---")
     
     chrome_options = Options()
     # LOW MEMORY SETTINGS
@@ -188,4 +188,186 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(1.5)
         
         # Preenchimento
-        wait.until(EC.visibility_of_element
+        wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
+        try:
+            sexo_val = paciente['sexo'].upper()[0]
+            script_campos = f"""
+                document.getElementById('generoAtalho').value = '{sexo_val}';
+                document.getElementById('generoAtalho').dispatchEvent(new Event('change'));
+                document.getElementById('nascimentoAtalho').value = '01/01/2000';
+                document.getElementById('emailAtalho').value = '{paciente['email']}';
+                document.getElementById('telefoneAtalho').value = '{paciente['telefone']}';
+            """
+            driver.execute_script(script_campos)
+        except: pass
+
+        # Salvar Paciente
+        logger.info(">> Salvando Paciente...")
+        btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
+        click_js(driver, btn_salvar)
+
+        # 3. TRANSIÇÃO COM RESGATE
+        logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
+        
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.XPATH, "//div[contains(text(), 'registrar nova consulta')]"))
+            )
+            logger.info("✅ Modal visível! Executando JS...")
+            driver.execute_script("swal.clickConfirm()")
+            time.sleep(3) 
+
+        except TimeoutException:
+            logger.warning("⚠️ Modal demorou ou não apareceu.")
+
+        # 4. TENTATIVA DE ACESSO AO PLANEJAMENTO (COM RESGATE)
+        logger.info(">> Buscando tela de Planejamento...")
+        
+        try:
+            # Tenta achar o botão de planejamento (5s)
+            btn_add = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+            logger.info("✅ Entramos direto!")
+        
+        except TimeoutException:
+            # 🚨 PROTOCOLO DE RESGATE
+            logger.warning("⚠️ Botão de planejamento sumiu. ATIVANDO RESGATE...")
+            
+            try:
+                try: driver.execute_script("swal.close()") 
+                except: pass
+                
+                logger.info(f"   > Procurando paciente '{paciente['nome']}' na lista...")
+                
+                # XPath Genérico para o nome
+                xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
+                
+                # AUMENTO DE PACIÊNCIA: 30s para carregar a lista
+                elem_nome = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.XPATH, xpath_nome)))
+                
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
+                click_js(driver, elem_nome)
+                logger.info("✅ RESGATE SUCESSO! Clicado no nome.")
+                
+                # Espera a URL mudar para confirmar que entrou
+                WebDriverWait(driver, 20).until(lambda d: "paciente" in d.current_url)
+                
+                # Tenta o botão de novo
+                btn_add = WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+                logger.info("✅ Agora sim! Estamos no planejamento.")
+                
+            except Exception as e_resgate:
+                logger.error(f"❌ FALHA TOTAL NO RESGATE: {e_resgate}")
+                raise Exception("Não foi possível acessar o paciente.")
+
+        # ======================================================================
+        # DAQUI PRA FRENTE É O FLUXO NORMAL
+        # ======================================================================
+
+        click_js(driver, btn_add)
+        time.sleep(1.5)
+
+        try:
+            el_link = driver.find_element(By.ID, "linkRef")
+            link_app_capturado = el_link.text.strip()
+            logger.info(f"✅ Link Capturado: {link_app_capturado}")
+        except: pass
+
+        # Confirmações iniciais
+        try:
+            btn_av = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]")))
+            click_js(driver, btn_av)
+            time.sleep(1)
+            
+            btn_criar = driver.find_element(By.ID, "criarPlanejamento")
+            click_js(driver, btn_criar)
+        except: pass
+        
+        time.sleep(3)
+
+        # --- LIMPEZA ---
+        logger.info(">> Limpando hábitos...")
+        try:
+            lixeiras = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
+            for _ in range(len(lixeiras) + 2):
+                try:
+                    lixeira = driver.find_element(By.CSS_SELECTOR, "i.fi-sr-trash")
+                    click_js(driver, lixeira)
+                    time.sleep(0.5)
+                    confirmar = driver.find_element(By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
+                    click_js(driver, confirmar)
+                    time.sleep(1)
+                except: break
+        except: pass
+
+        # --- FAVORITOS ---
+        logger.info(">> Favoritos...")
+        driver.execute_script("window.scrollTo(0, 0);")
+        
+        btn_fav = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='verRefeicoesProntas']")))
+        click_js(driver, btn_fav)
+        time.sleep(3)
+        
+        selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
+        selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
+        
+        try:
+            driver.execute_script("document.querySelector('button.close[data-dismiss=\"modal\"]').click()")
+        except:
+            driver.execute_script("document.querySelector('.modal-backdrop').click()")
+        
+        # Horários
+        definir_horario(driver, "horarioRotinaTemp0", "08:00")
+        definir_horario(driver, "horarioRotinaTemp1", "12:00")
+        
+        logger.info(">> Salvando Prescrição...")
+        time.sleep(1)
+        try:
+            btn_final = driver.find_element(By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']")
+            click_js(driver, btn_final)
+            logger.info("✅ Salvo!")
+            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Sucesso Total")
+        except:
+            logger.error("Erro ao salvar final.")
+
+        return {"status": "sucesso", "link": link_app_capturado}
+
+    except Exception as e:
+        logger.error(f"❌ ERRO FATAL: {traceback.format_exc()}")
+        enviar_webhook(paciente, dados_clinicos, link_app_capturado, f"Erro Fatal: {str(e)}")
+        return {"status": "erro", "mensagem": str(e)}
+    finally:
+        try: driver.quit()
+        except: pass
+
+# ==============================================================================
+# 🚀 API
+# ==============================================================================
+app = FastAPI()
+
+class DadosPaciente(BaseModel):
+    nome: str
+    sexo: str
+    email: str
+    telefone: str
+
+class PedidoCadastro(BaseModel):
+    paciente: DadosPaciente
+    dados_clinicos: Optional[Dict[str, Any]] = {}
+
+@app.post("/cadastrar-paciente")
+def api_cadastrar_unificada(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
+    usuario, senha = ler_credenciais()
+    if not usuario or not senha:
+        raise HTTPException(status_code=500, detail="Credenciais não configuradas.")
+
+    background_tasks.add_task(
+        executar_cadastro, 
+        usuario, 
+        senha, 
+        pedido.paciente.dict(),
+        pedido.dados_clinicos
+    )
+    return {"mensagem": "Processando...", "paciente": pedido.paciente.nome}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=10000)
