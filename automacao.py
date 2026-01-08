@@ -153,30 +153,37 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except: pass
         logger.info("✅ Cadastro enviado (Modal fechou).")
 
-        # --- PONTO CRÍTICO: TRANSIÇÃO PARA O DASHBOARD ---
-        logger.info("3. Aguardando redirecionamento/popup pós-cadastro...")
-        time.sleep(1)
+        # --- 3. REDIRECIONAMENTO (O PULO DO GATO) ---
+        logger.info("3. Aguardando popup de confirmação (Registrar Consulta)...")
+        time.sleep(1.5)
         
-        # Tenta clicar no botão "abrir menu" se aparecer (É OBRIGATÓRIO para mudar de tela)
         try:
-            logger.info("   > Procurando popup 'abrir menu'...")
-            # XPath genérico para pegar qualquer variação do texto
-            btn_pos_cadastro = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(), 'abrir menu')]")))
-            click_js(driver, btn_pos_cadastro, "Botão Abrir Menu (Pós-Cadastro)")
-            logger.info("   > Botão de redirecionamento clicado!")
-            time.sleep(3) # Tempo para a página carregar
+            # Busca EXATAMENTE o botão que você mandou
+            # <div ... class="botao" onclick="swal.clickConfirm()">registrar nova consulta</div>
+            
+            logger.info("   > Procurando botão 'registrar nova consulta'...")
+            
+            # XPath procura DIV que contém o texto e o onclick
+            btn_redirecionar = wait.until(EC.element_to_be_clickable(
+                (By.XPATH, "//div[contains(text(), 'registrar nova consulta')]")
+            ))
+            
+            click_js(driver, btn_redirecionar, "Botão Registrar Nova Consulta")
+            logger.info("   > Botão de redirecionamento clicado! Aguardando carga...")
+            time.sleep(4) # Tempo extra para carregar o painel do paciente
+            
         except TimeoutException:
-            logger.warning("   > Popup 'abrir menu' não apareceu. Verificando se já estamos no dashboard...")
+            logger.warning("   > ⚠️ Botão 'registrar nova consulta' não apareceu. Tentando seguir (pode falhar)...")
 
-        # Captura Link
+        # Captura Link (para confirmar que estamos na página certa)
         try:
-            logger.info("   > Buscando Link...")
+            logger.info(f"   > URL Atual: {driver.current_url}")
             el_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
             link_app_capturado = el_link.text.strip()
-            logger.info(f"✅ Link Capturado: {link_app_capturado}")
+            logger.info(f"✅ Estamos no Painel do Paciente! Link: {link_app_capturado}")
         except:
-            logger.error(f"❌ Link não encontrado. URL Atual: {driver.current_url}")
-            # Se não achou o link, provavelmente não estamos na tela certa
+            logger.error(f"❌ Link não encontrado. O robô provavelmente não saiu da Home.")
+            # Se não saiu da home, o resto vai falhar, mas vamos deixar o erro explodir no próximo passo para debug
 
         # 4. PLANEJAMENTO
         if dados_clinicos:
@@ -184,12 +191,10 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
             logger.info("   > 🔍 Procurando botão 'atalhoPlanejamento'...")
             try:
-                # Agora usamos visibility para garantir que carregou
                 btn_add = wait.until(EC.visibility_of_element_located((By.ID, "atalhoPlanejamento")))
                 click_js(driver, btn_add, "Atalho Planejamento")
             except TimeoutException:
-                logger.error(f"❌ ERRO FATAL: Botão de planejamento não encontrado na URL: {driver.current_url}")
-                # Fallback: Tentar navegar direto para a URL se soubermos (difícil sem ID)
+                logger.error(f"❌ ERRO FATAL: Botão de planejamento não encontrado. URL: {driver.current_url}")
                 raise Exception("Falha ao navegar para o Dashboard do paciente.")
 
             time.sleep(1.5)
@@ -197,12 +202,18 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             # Confirmações
             logger.info("   > Procurando botão 'Avançar'...")
             try:
-                btn_av = short.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")))
+                # Tenta achar o botão avançar do swal
+                btn_av = short.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm') and contains(text(), 'avançar')]")))
                 click_js(driver, btn_av, "Confirmar Avançar")
                 time.sleep(1)
-            except: pass
+            except: 
+                # As vezes é só "confirmar" direto
+                try:
+                    btn_gen = short.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")))
+                    click_js(driver, btn_gen, "Confirmar Genérico")
+                except: pass
 
-            logger.info("   > Procurando botão 'Confirmar'...")
+            logger.info("   > Procurando botão 'Confirmar' (ID criarPlanejamento)...")
             try:
                 btn_criar = wait.until(EC.presence_of_element_located((By.ID, "criarPlanejamento")))
                 click_js(driver, btn_criar, "Criar Planejamento")
@@ -217,6 +228,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                     btn_lixo = short.until(EC.presence_of_element_located((By.CSS_SELECTOR, "i.fi-sr-trash")))
                     click_js(driver, btn_lixo, "Lixeira")
                     
+                    # Confirmação genérica do swal
                     btn_conf = short.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")))
                     click_js(driver, btn_conf, "Confirmar Exclusão")
                     time.sleep(1)
