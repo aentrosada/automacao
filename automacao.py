@@ -83,21 +83,22 @@ def enviar_webhook(msg, link=""):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ CORRIGIDO (FLUXO DO VÍDEO)
+# 🤖 ROBÔ ESTÁVEL (SEM OTIMIZAÇÕES DE RISCO)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("🚀 INICIANDO ROBÔ CORRIGIDO (COM MAPA COMPLETO)")
+    logger.info("🚀 INICIANDO ROBÔ ESTÁVEL")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
     chrome_options.add_argument("--window-size=1920,1080")
+    # REMOVIDO: blink-settings=imagesEnabled=false (Deixa carregar imagens para estabilidade)
+    # REMOVIDO: page_load_strategy = 'eager' (Espera a página carregar 100% antes de agir)
     
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 20)
+    wait = WebDriverWait(driver, 30) # Aumentei o timeout padrão para 30s
     short = WebDriverWait(driver, 5)
     
     link_final = "Não gerado"
@@ -110,15 +111,18 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         driver.switch_to.active_element.send_keys(senha + Keys.ENTER)
         
         # 2. CADASTRAR PACIENTE
-        time.sleep(3)
+        # Espera generosa para o dashboard carregar após login
+        time.sleep(5) 
+        
         logger.info(">> Clicando 'Adicionar Paciente'...")
+        # Volta para o seletor original que funcionava
         btn_add = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='novoPaciente']")))
         click_js(driver, btn_add)
         
         logger.info(">> Preenchendo dados...")
         wait.until(EC.visibility_of_element_located((By.ID, "nomeAtalho"))).send_keys(paciente["nome"])
         
-        # Injeção JS para dados
+        # Injeção JS para dados (Isso é seguro e rápido)
         driver.execute_script(f"""
             try {{ document.getElementById('generoAtalho').value = '{paciente['sexo'].upper()[0]}'; }} catch(e) {{}}
             document.getElementById('nascimentoAtalho').value = '01/01/2000';
@@ -129,9 +133,9 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         logger.info(">> Salvando...")
         click_js(driver, driver.find_element(By.ID, "novoPacienteBtnAtalho"))
         
-        # 3. TRATAMENTO DO POPUP "NOVA CONSULTA" (CRUCIAL!)
+        # 3. TRATAMENTO DO POPUP "NOVA CONSULTA" (Baseado no seu vídeo)
         logger.info(">> Aguardando Popup 'Nova Consulta'...")
-        time.sleep(2)
+        time.sleep(3) # Tempo para o modal de sucesso sumir e o novo aparecer
         
         try:
             # Clica no botão AZUL "Registrar nova consulta"
@@ -145,6 +149,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
         # 4. VALIDAÇÃO DE TELA DE PERFIL
         try:
+            # Agora estamos na tela do paciente, esperamos o botão da dieta aparecer
             wait.until(EC.visibility_of_element_located((By.ID, "atalhoPlanejamento")))
             logger.info("✅ Estamos no perfil do paciente!")
             try:
@@ -153,7 +158,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             except: pass
         except TimeoutException:
             logger.error(f"❌ ERRO: Não chegou na tela de perfil. URL: {driver.current_url}")
-            raise Exception("Falha de navegação pós-cadastro")
+            raise Exception("Falha de navegação pós-cadastro (Dashboard não carregou)")
 
         # 5. PLANEJAMENTO
         if dados_clinicos:
@@ -165,7 +170,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
             # Passa pelo Wizard (Avançar -> Confirmar)
             try:
-                time.sleep(1)
+                time.sleep(2)
                 btn_avancar = short.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(), 'avançar')]")))
                 click_js(driver, btn_avancar)
                 time.sleep(1)
@@ -184,7 +189,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                     
                     conf = short.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(), 'remover hábito')]")))
                     click_js(driver, conf)
-                    time.sleep(1)
+                    time.sleep(1.5) # Tempo para processar exclusão
                 except: break
 
             # --- ADICIONAR FAVORITOS ---
