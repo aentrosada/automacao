@@ -122,7 +122,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             click_js(driver, elem)
             
-            # Tenta confirmar (swal clickConfirm)
             try:
                 btn_confirmar = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
@@ -131,7 +130,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
                 time.sleep(0.5)
                 logger.info(f"✅ Adicionado: {nome_real}")
             except TimeoutException:
-                # Retry
                 click_js(driver, elem)
                 time.sleep(0.5)
                 try:
@@ -154,10 +152,10 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V14 (Com Debug Detalhado de Tela) ---")
+    logger.info("--- ⚡ Iniciando Robô V14 (Pausa 3s + Seletor Exato) ---")
     
     chrome_options = Options()
-    # LOW MEMORY & PERFORMANCE SETTINGS
+    # LOW MEMORY
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -209,98 +207,51 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
 
-        # 3. CONFIRMAÇÃO DO MODAL (JS DIRETO)
-        logger.info(">> Aguardando Modal...")
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.visibility_of_element_located((By.XPATH, "//div[contains(text(), 'registrar nova consulta')]"))
-            )
-            driver.execute_script("swal.clickConfirm()")
-            logger.info("✅ JS Confirm executado.")
-            time.sleep(3) 
-        except TimeoutException:
-            logger.warning("⚠️ Modal não apareceu (pode ter sido rápido).")
+        # ======================================================================
+        # 3. TRANSIÇÃO: PAUSA DE 3 SEGUNDOS + CLIQUE NO BOTÃO ESPECÍFICO
+        # ======================================================================
+        logger.info(">> ⏳ Aguardando 3 segundos fixos (Pausa para carregar modal)...")
+        time.sleep(3) # AQUI ESTÁ A PAUSA QUE VOCÊ PEDIU
 
-        # 4. BUSCA PELO PLANEJAMENTO (PENTE FINO + DEBUG)
+        logger.info(">> Clicando em 'Registrar Nova Consulta'...")
+        
+        try:
+            # Seletor baseado exatamente no HTML que você mandou: 
+            # <div ... onclick="swal.clickConfirm()">registrar nova consulta</div>
+            xpath_botao = "//div[contains(text(), 'registrar nova consulta')]"
+            
+            # Espera o botão estar clicável
+            btn_confirmar = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xpath_botao)))
+            click_js(driver, btn_confirmar)
+            logger.info("✅ Botão clicado!")
+            
+            # Pausa para o redirecionamento acontecer
+            time.sleep(4) 
+
+        except TimeoutException:
+            logger.warning("⚠️ Botão não apareceu ou timeout. Tentando JS direto como backup...")
+            driver.execute_script("swal.clickConfirm()")
+            time.sleep(4)
+
+        # ======================================================================
+        # 4. BUSCA TELA DE PLANEJAMENTO
+        # ======================================================================
         logger.info(">> Buscando tela de Planejamento...")
         
         driver.execute_script("document.body.style.zoom='70%'")
 
-        encontrou_planejamento = False
-        
-        # TENTATIVA 1: Direta
         try:
-            btn_add = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
+            # Tenta achar o botão de planejamento
+            btn_add = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_add)
-            encontrou_planejamento = True
-            logger.info("✅ Planejamento encontrado de primeira!")
+            logger.info("✅ Planejamento iniciado!")
         except:
-            logger.warning("⚠️ Tentativa 1 falhou. Iniciando RESGATE...")
-
-        # TENTATIVA 2: RESGATE VIA NOME
-        if not encontrou_planejamento:
-            try:
-                try: driver.execute_script("swal.close(); document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());") 
-                except: pass
-                
-                logger.info(f"   > Procurando paciente '{paciente['nome']}' na lista...")
-                
-                xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
-                elem_nome = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xpath_nome)))
-                
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
-                click_js(driver, elem_nome)
-                logger.info("✅ Nome clicado. Aguardando carregamento...")
-                
-                time.sleep(5) 
-                
-                # Tenta achar o botão por ID ou TEXTO
-                try:
-                    btn_add = WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-                    click_js(driver, btn_add)
-                    encontrou_planejamento = True
-                    logger.info("✅ Planejamento encontrado após resgate (ID)!")
-                except:
-                    logger.info("   > ID falhou. Tentando por texto...")
-                    btn_add = driver.find_element(By.XPATH, "//div[contains(text(), 'adicionar') and contains(text(), 'planejamento')]")
-                    click_js(driver, btn_add)
-                    encontrou_planejamento = True
-                    logger.info("✅ Planejamento encontrado após resgate (TEXTO)!")
-
-            except Exception as e_resgate:
-                logger.error(f"❌ FALHA NO RESGATE: {e_resgate}")
-                
-                # ==========================================================
-                # 📸 DEBUG DETALHADO DA TELA (RAIO-X)
-                # ==========================================================
-                logger.info("========== 📸 INICIO DO DEBUG DE TELA ==========")
-                logger.info(f"URL ATUAL: {driver.current_url}")
-                logger.info(f"TÍTULO DA PÁGINA: {driver.title}")
-                
-                try:
-                    # Captura o HTML para ver o que tem na tela
-                    html_source = driver.page_source
-                    # Limita a 4000 caracteres para não estourar o log, mas pega o início do body
-                    body_start = html_source.find("<body")
-                    debug_html = html_source[body_start : body_start + 4000]
-                    logger.info(f"HTML (Trecho): {debug_html}")
-                    
-                    # Verifica se estamos na home ou login
-                    if "Painel" in driver.title: logger.info(">> PARECE QUE ESTAMOS NO DASHBOARD.")
-                    if "Login" in driver.title: logger.info(">> PARECE QUE CAIU NO LOGIN.")
-                    
-                except:
-                    logger.info("Erro ao capturar HTML.")
-                logger.info("========== 📸 FIM DO DEBUG DE TELA ==========")
-                # ==========================================================
-
-        if not encontrou_planejamento:
-            raise Exception("Não foi possível acessar o planejamento do paciente.")
+            logger.error("❌ Não foi possível encontrar o botão 'atalhoPlanejamento'. O redirecionamento falhou.")
+            raise Exception("Falha na transição para o paciente.")
 
         # ======================================================================
         # FLUXO DE CRIAÇÃO DA DIETA
         # ======================================================================
-        
         time.sleep(2)
 
         try:
@@ -309,7 +260,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info(f"✅ Link Capturado: {link_app_capturado}")
         except: pass
 
-        # Confirmações iniciais (Avançar / Criar)
         try:
             btn_av = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]")))
             click_js(driver, btn_av)
@@ -321,7 +271,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         time.sleep(3)
 
-        # --- LIMPEZA DE HÁBITOS ---
+        # --- LIMPEZA ---
         logger.info(">> Limpando hábitos...")
         try:
             lixeiras = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
