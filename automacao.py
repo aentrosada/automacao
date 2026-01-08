@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -152,10 +152,9 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V14 (Pausa 3s + Seletor Exato) ---")
+    logger.info("--- ⚡ Iniciando Robô V15 (Pausa de 3s Pós-Modal) ---")
     
     chrome_options = Options()
-    # LOW MEMORY
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -208,30 +207,26 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, btn_salvar)
 
         # ======================================================================
-        # 3. TRANSIÇÃO: PAUSA DE 3 SEGUNDOS + CLIQUE NO BOTÃO ESPECÍFICO
+        # 3. TRANSIÇÃO: ESPERA 3S PRE-MODAL -> CLICA -> ESPERA 3S POS-MODAL
         # ======================================================================
-        logger.info(">> ⏳ Aguardando 3 segundos fixos (Pausa para carregar modal)...")
-        time.sleep(3) # AQUI ESTÁ A PAUSA QUE VOCÊ PEDIU
+        logger.info(">> ⏳ Aguardando 3 segundos para modal aparecer...")
+        time.sleep(3) 
 
         logger.info(">> Clicando em 'Registrar Nova Consulta'...")
-        
         try:
-            # Seletor baseado exatamente no HTML que você mandou: 
-            # <div ... onclick="swal.clickConfirm()">registrar nova consulta</div>
+            # Seletor exato
             xpath_botao = "//div[contains(text(), 'registrar nova consulta')]"
-            
-            # Espera o botão estar clicável
             btn_confirmar = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xpath_botao)))
             click_js(driver, btn_confirmar)
             logger.info("✅ Botão clicado!")
             
-            # Pausa para o redirecionamento acontecer
-            time.sleep(4) 
-
         except TimeoutException:
-            logger.warning("⚠️ Botão não apareceu ou timeout. Tentando JS direto como backup...")
+            logger.warning("⚠️ Botão não apareceu ou timeout. Tentando JS direto...")
             driver.execute_script("swal.clickConfirm()")
-            time.sleep(4)
+
+        # AQUI ESTÁ A PAUSA QUE VOCÊ PEDIU
+        logger.info(">> ⏳ Aguardando 3 segundos para carregar a tela do paciente...")
+        time.sleep(3)
 
         # ======================================================================
         # 4. BUSCA TELA DE PLANEJAMENTO
