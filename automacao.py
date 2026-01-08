@@ -135,7 +135,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options.add_argument("--window-size=1920,1080") 
 
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 25)
+    wait = WebDriverWait(driver, 30)
     
     link_app_capturado = "Link não encontrado"
 
@@ -166,20 +166,19 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         """)
         time.sleep(1)
 
-        # 2. CADASTRO DE PACIENTE (CORRIGIDO COM SEU SNIPPET)
+        # 2. CADASTRO DE PACIENTE
         logger.info(">> Procurando botão 'adicionar paciente'...")
         
-        # Lista de tentativas baseada no seu HTML: <div class="botao" ... onclick="novoPaciente('index')">adicionar paciente</div>
         seletores = [
-            "//div[contains(text(), 'adicionar paciente')]",    # Texto exato minúsculo
-            "//div[@onclick=\"novoPaciente('index')\"]",        # Onclick exato
-            "//div[contains(@class, 'botao') and contains(text(), 'adicionar')]" # Classe + Texto parcial
+            "//div[contains(text(), 'adicionar paciente')]",    
+            "//div[@onclick=\"novoPaciente('index')\"]",        
+            "//div[contains(@class, 'botao') and contains(text(), 'adicionar')]" 
         ]
         
         btn_encontrado = False
         for xpath in seletores:
             try:
-                btn = WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH, xpath)))
+                btn = WebDriverWait(driver, 3).until(EC.presence_of_element_located((By.XPATH, xpath)))
                 logger.info(f"Botão encontrado via: {xpath}")
                 click_js(driver, btn)
                 btn_encontrado = True
@@ -188,7 +187,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
         if not btn_encontrado:
             logger.warning("Botão visual falhou. Tentando Injeção JS Direta...")
-            # Chama a função JS diretamente como último recurso
             driver.execute_script("novoPaciente('index');")
 
         # Preenchimento do Form
@@ -207,21 +205,23 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         logger.info("Clicando em Salvar...")
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
-        time.sleep(3)
+        time.sleep(2)
         
-        # Garante que salvou
+        # --- CORREÇÃO PÓS-SALVAMENTO: MODAL NOVA CONSULTA ---
+        logger.info(">> Aguardando modal 'Nova Consulta'...")
         try:
-             if btn_salvar.is_displayed(): click_js(driver, btn_salvar)
-        except: pass
-        
-        # 3. CAPTURA LINK
-        time.sleep(3)
-        try:
-            # Tenta clicar no botão "não registrar" se aparecer
-            try: 
-                driver.execute_script("document.querySelector(\"div[onclick*='não registrar']\").click()")
-            except: pass
+            # Espera o modal e clica em "não registrar e abrir menu"
+            btn_abrir_menu = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(
+                (By.XPATH, "//div[contains(text(), 'não registrar e abrir menu')]")
+            ))
+            logger.info("Botão 'Abrir Menu' encontrado! Clicando...")
+            click_js(driver, btn_abrir_menu)
+            time.sleep(3) # Tempo para carregar perfil
+        except TimeoutException:
+            logger.warning("Modal não apareceu ou botão não encontrado. Seguindo fluxo...")
 
+        # 3. CAPTURA LINK
+        try:
             elemento_link = wait.until(EC.visibility_of_element_located((By.ID, "linkRef")))
             link_app_capturado = elemento_link.text.strip()
             logger.info(f"✅ LINK: {link_app_capturado}")
@@ -234,10 +234,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             
             # Botão Adicionar Planejamento
             try:
-                btn_add_planejamento = wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
+                # Tenta pelo ID primeiro
+                btn_add_planejamento = wait.until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
                 click_js(driver, btn_add_planejamento)
             except:
-                btn_alt = driver.find_element(By.XPATH, "//i[contains(@class, 'fa-utensils')]/..")
+                # Fallback pelo texto visual
+                logger.info("Tentando achar botão pelo texto...")
+                btn_alt = driver.find_element(By.XPATH, "//div[contains(text(), 'adicionar') and contains(text(), 'planejamento')]")
                 click_js(driver, btn_alt)
 
             time.sleep(2)
@@ -270,7 +273,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info(">> Favoritos...")
             try:
                 driver.execute_script("window.scrollTo(0, 0);")
-                # Seletor robusto para o botão de favoritos
                 btn_fav = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'refeições favoritas')]")))
                 click_js(driver, btn_fav)
                 time.sleep(3)
