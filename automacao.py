@@ -151,10 +151,9 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V11 (Modo Paciência + Low Memory) ---")
+    logger.info("--- ⚡ Iniciando Robô V12 (Zero URL Check) ---")
     
     chrome_options = Options()
-    # LOW MEMORY SETTINGS
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -226,7 +225,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         try:
             # Tenta achar o botão de planejamento (5s)
             btn_add = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
-            logger.info("✅ Entramos direto!")
+            logger.info("✅ Entramos direto! Botão encontrado.")
         
         except TimeoutException:
             # 🚨 PROTOCOLO DE RESGATE
@@ -248,11 +247,9 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 click_js(driver, elem_nome)
                 logger.info("✅ RESGATE SUCESSO! Clicado no nome.")
                 
-                # Espera a URL mudar para confirmar que entrou
-                WebDriverWait(driver, 20).until(lambda d: "paciente" in d.current_url)
-                
-                # Tenta o botão de novo
-                btn_add = WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
+                # AQUI MUDOU: NÃO ESPERAMOS URL, ESPERAMOS O BOTÃO
+                logger.info("   > Aguardando botão de planejamento (Sem checar URL)...")
+                btn_add = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
                 logger.info("✅ Agora sim! Estamos no planejamento.")
                 
             except Exception as e_resgate:
