@@ -149,7 +149,7 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô Corrigido ---")
+    logger.info("--- ⚡ Iniciando Robô Corrigido V5 ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -176,7 +176,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         # 2. CADASTRO
         logger.info(">> Abrindo Novo Paciente...")
-        # Usa seletor genérico robusto
         btn_novo = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, 'novoPaciente')]")))
         click_js(driver, btn_novo)
         
@@ -202,43 +201,35 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
 
-        # 3. TRANSIÇÃO CRÍTICA (O CORRETOR DE ERRO)
-        logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
-        time.sleep(1.5) # Tempo para o modal aparecer
+        # 3. TRANSIÇÃO CRÍTICA (CORRIGIDA - ESPERA 15s)
+        logger.info(">> Aguardando Modal 'Registrar Nova Consulta' (até 15s)...")
         
         modal_sucesso = False
         try:
-            # Tenta encontrar o botão específico que você mandou: "registrar nova consulta"
-            xpath_confirmacao = "//div[contains(text(), 'registrar') and contains(text(), 'consulta')]"
-            btn_confirmar_consulta = WebDriverWait(driver, 8).until(
-                EC.element_to_be_clickable((By.XPATH, xpath_confirmacao))
+            # Procura o botão de confirmação padrão do SweetAlert ou pelo onclick específico
+            btn_confirmar_consulta = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm'], button.swal2-confirm"))
             )
             logger.info("✅ Botão 'Registrar Nova Consulta' encontrado! Clicando...")
             click_js(driver, btn_confirmar_consulta)
             modal_sucesso = True
+            
         except TimeoutException:
-            logger.warning("⚠️ Botão de texto não achado. Tentando seletor genérico swal...")
-            try:
-                # Tenta o botão de confirmação padrão do SweetAlert
-                btn_generico = driver.find_element(By.CSS_SELECTOR, "div.swal2-confirm, button.swal2-confirm, div[onclick*='swal.clickConfirm']")
-                click_js(driver, btn_generico)
-                logger.info("✅ Botão Genérico clicado.")
-                modal_sucesso = True
-            except:
-                logger.error("❌ ERRO CRÍTICO: Não foi possível clicar em 'Registrar Nova Consulta'. O robô vai travar.")
-
-        # Aguarda sair do Dashboard (mudança de URL ou carregamento do menu lateral do paciente)
+            logger.error("❌ TIMEOUT: O modal de confirmação não apareceu em 15 segundos.")
+            # Não faz recarregamento, apenas loga e tenta seguir se a URL já tiver mudado por milagre
+        
+        # Aguarda sair do Dashboard
         if modal_sucesso:
+            logger.info(">> Aguardando redirecionamento...")
             try:
-                # Espera URL sair do painel/v4 puro
-                WebDriverWait(driver, 10).until(lambda d: "/painel/v4/" not in d.current_url or "paciente" in d.current_url)
-                logger.info("✅ Redirecionamento confirmado!")
+                WebDriverWait(driver, 10).until(lambda d: "paciente" in d.current_url)
+                logger.info(f"✅ Sucesso! URL: {driver.current_url}")
             except: 
-                logger.warning("⚠️ URL parece não ter mudado, mas vamos tentar seguir.")
+                logger.warning("⚠️ URL demorou a mudar, mas seguindo o fluxo...")
 
         # 4. CAPTURA LINK
         try:
-            # Tenta fechar menu lateral se existir (oculta elementos)
+            # Tenta fechar menu lateral se existir
             try:
                 driver.find_element(By.CSS_SELECTOR, "div[onclick*='não registrar']").click()
             except: pass
@@ -253,12 +244,10 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         if dados_clinicos:
             logger.info(">> Iniciando Fluxo de Planejamento...")
             
-            # AGORA ESTAMOS NA TELA CERTA
             try:
                 btn_add = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
                 click_js(driver, btn_add)
             except TimeoutException:
-                # Log de debug para ver onde estamos se falhar
                 logger.error(f"❌ Falha ao achar atalhoPlanejamento. URL Atual: {driver.current_url}")
                 raise Exception("Botão de planejamento não encontrado (Verifique redirecionamento).")
 
@@ -266,12 +255,10 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
             # Confirmações iniciais (Avançar/Criar)
             try:
-                # Botão Avançar
                 btn_av = WebDriverWait(driver, 3).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]")))
                 click_js(driver, btn_av)
                 time.sleep(1)
                 
-                # Botão Criar (ID criarPlanejamento)
                 btn_criar = driver.find_element(By.ID, "criarPlanejamento")
                 click_js(driver, btn_criar)
             except: pass
@@ -284,7 +271,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 lixeiras = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
                 for _ in lixeiras:
                     try:
-                        # Re-busca a primeira lixeira visível a cada loop para evitar StaleElement
                         lixeira = driver.find_element(By.CSS_SELECTOR, "i.fi-sr-trash")
                         click_js(driver, lixeira)
                         time.sleep(0.5)
@@ -322,11 +308,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             # --- SALVAR FINAL ---
             logger.info(">> Salvando Prescrição...")
             time.sleep(1)
-            btn_final = driver.find_element(By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']")
-            click_js(driver, btn_final)
-            logger.info("✅ Salvo com sucesso!")
-            
-            enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Sucesso Total")
+            try:
+                btn_final = driver.find_element(By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']")
+                click_js(driver, btn_final)
+                logger.info("✅ Salvo com sucesso!")
+                enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Sucesso Total")
+            except:
+                logger.error("Erro ao salvar final")
 
         else:
             enviar_webhook(paciente, dados_clinicos, link_app_capturado, "Apenas Cadastro")
