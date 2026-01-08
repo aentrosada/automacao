@@ -104,7 +104,7 @@ def definir_horario(driver, element_id, horario):
     except Exception as e:
         logger.warning(f"Erro ao definir horário: {e}")
 
-# --- SELEÇÃO DE ITENS ---
+# --- SELEÇÃO COM CONFIRMAÇÃO OBRIGATÓRIA ---
 def selecionar_itens(driver, wait, categoria, codigos_brutos):
     if not codigos_brutos: return
     logger.info(f">> Processando categoria: {categoria} com códigos: {codigos_brutos}")
@@ -118,32 +118,39 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             
         try:
             logger.info(f"Procurando item: {nome_real}")
+            
+            # Encontra o item
             xpath_item = f"//span[contains(text(), '{nome_real}')]"
-            
-            elem = WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.XPATH, xpath_item))
-            )
-            
+            elem = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, xpath_item)))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
-            time.sleep(1) 
+            time.sleep(0.5)
             
+            # Tenta clicar e confirmar (Retry logic)
             sucesso = False
-            for tentativa in range(3):
+            for i in range(3):
                 try:
+                    # 1. Clica no item
                     click_js(driver, elem)
-                    btn_confirmar = WebDriverWait(driver, 2).until(EC.element_to_be_clickable(
+                    
+                    # 2. Espera o Modal de Confirmação (OBRIGATÓRIO AGORA)
+                    # O botão de confirmar é: onclick="swal.clickConfirm()"
+                    btn_confirmar = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
                         (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()')]")
                     ))
+                    
+                    # 3. Clica em Confirmar
                     click_js(driver, btn_confirmar)
-                    time.sleep(1)
-                    logger.info(f"✅ Item '{nome_real}' adicionado.")
+                    time.sleep(1.5) # Espera processar
+                    
+                    logger.info(f"✅ Item '{nome_real}' adicionado e confirmado.")
                     sucesso = True
                     break
                 except TimeoutException:
+                    logger.warning(f"Tentativa {i+1}: Modal de confirmação não apareceu para '{nome_real}'. Tentando clicar de novo...")
                     time.sleep(1)
             
             if not sucesso:
-                logger.error(f"❌ Falha ao adicionar '{nome_real}'.")
+                logger.error(f"❌ Falha: Não consegui confirmar a inclusão de '{nome_real}'.")
 
         except Exception as e:
             logger.warning(f"Item não encontrado na lista: {nome_real}")
@@ -164,23 +171,18 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     logger.info("--- 🔧 Configurando Chrome Ultra-Leve ---")
     chrome_options = Options()
+    
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-extensions") 
-    chrome_options.add_argument("--window-size=1920,1080")
-    # Configuração extra para evitar timeout de carregamento
-    chrome_options.page_load_strategy = 'eager' 
+    chrome_options.add_argument("--disable-extensions")
+    # Limita cache para economizar RAM
+    chrome_options.add_argument("--disk-cache-size=0")
+    chrome_options.add_argument("--window-size=1920,1080") 
 
     driver = webdriver.Chrome(options=chrome_options)
-    # Define timeout de script para não travar
-    driver.set_script_timeout(30)
-    driver.set_page_load_timeout(60)
-    
     wait = WebDriverWait(driver, 30)
-    # Wait curto para operações arriscadas
-    short_wait = WebDriverWait(driver, 3) 
     
     link_app_capturado = "Link não encontrado"
 
@@ -269,38 +271,43 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_confirmar)
             time.sleep(5) 
 
-            # --- LIMPEZA TURBO (VIA JAVASCRIPT) ---
-            # Isso evita que o navegador trave procurando elementos visualmente
-            logger.info(">> Limpando hábitos padrão (Via JS)...")
-            try:
-                # 1. Clica em todas as lixeiras visíveis de uma vez
-                driver.execute_script("""
-                    var lixeiras = document.querySelectorAll('i.fi-sr-trash');
-                    lixeiras.forEach(function(btn) {
-                        btn.click();
-                    });
-                """)
-                time.sleep(1)
-                
-                # 2. Confirma todos os popups que aparecerem (Loop rápido)
-                for _ in range(5):
-                    try:
-                        # Procura botão confirmar
-                        btn_confirmar_remocao = short_wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()')]")))
-                        click_js(driver, btn_confirmar_remocao)
-                        time.sleep(0.5)
-                    except TimeoutException:
-                        break # Parou de aparecer confirmação, acabou
-            except Exception as e:
-                logger.warning(f"Erro não fatal na limpeza JS: {e}")
-            
-            logger.info("✅ Limpeza finalizada.")
-            # -------------------------------------
+            # --- LIMPEZA DOS HÁBITOS (SEQUENCIAL COM CONFIRMAÇÃO) ---
+            logger.info(">> Limpando hábitos padrão...")
+            # Loop seguro: Enquanto achar lixeira, clica nela e confirma
+            max_lixeiras = 5
+            while max_lixeiras > 0:
+                try:
+                    # 1. Acha a lixeira (usa css selector robusto)
+                    btn_lixeira = driver.find_element(By.CSS_SELECTOR, "i.fi-sr-trash")
+                    click_js(driver, btn_lixeira)
+                    
+                    # 2. Espera e clica no Confirmar (Modal)
+                    btn_confirmar_remocao = WebDriverWait(driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()')]"))
+                    )
+                    click_js(driver, btn_confirmar_remocao)
+                    
+                    # 3. Espera o item sumir
+                    time.sleep(1.5) 
+                    logger.info("🗑️ Hábito removido.")
+                    max_lixeiras -= 1
+                except NoSuchElementException:
+                    logger.info("✅ Todos os hábitos visíveis foram removidos.")
+                    break 
+                except TimeoutException:
+                    logger.warning("Modal de confirmação de exclusão não apareceu.")
+                    break
+                except Exception as e:
+                    logger.warning(f"Erro ao limpar hábito: {e}")
+                    break
 
+            # FAVORITOS
             logger.info(">> Abrindo Favoritos/Refeições Prontas...")
             try:
                 driver.execute_script("window.scrollBy(0, -200);")
                 time.sleep(1)
+                
+                # Busca botão pelo texto
                 btn_favoritas = wait.until(EC.element_to_be_clickable(
                     (By.XPATH, "//div[contains(., 'refeições favoritas') and contains(@class, 'botao')]")
                 ))
@@ -309,9 +316,9 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 time.sleep(5) 
             except Exception as e:
                 logger.warning(f"⚠️ Falha ao abrir Favoritos: {e}")
-                # Se falhar, tenta salvar o que tem
-                raise Exception("Menu de Favoritos não abriu (Possível timeout).")
+                raise Exception("Menu de Favoritos não abriu.")
 
+            # SELEÇÃO
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
             
@@ -329,6 +336,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 except: pass
 
             logger.info(">> Salvando Prescrição...")
+            # Busca botão salvar FINAL
             btn_salvar_final = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_salvar_final)
             time.sleep(1)
