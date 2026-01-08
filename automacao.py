@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 📝 CONFIGURAÇÃO DE LOGS
+# 📝 CONFIGURAÇÃO DE LOG
 # ==============================================================================
 logging.basicConfig(
     level=logging.INFO,
