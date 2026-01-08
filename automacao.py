@@ -118,8 +118,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             
         try:
             logger.info(f"Procurando item: {nome_real}")
-            
-            # Busca pelo SPAN com texto
             xpath_item = f"//span[contains(text(), '{nome_real}')]"
             
             elem = WebDriverWait(driver, 5).until(
@@ -129,7 +127,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             time.sleep(1) 
             
-            # Retry logic
             sucesso = False
             for tentativa in range(3):
                 try:
@@ -220,7 +217,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
         time.sleep(3)
         
-        # Verificação básica de sucesso
         try:
             if btn_salvar.is_displayed():
                  try:
@@ -245,17 +241,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except:
             logger.info("Link não apareceu de imediato.")
 
-        # --- REFRESH ESTRATÉGICO PARA LIBERAR MEMÓRIA ---
-        logger.info("🔄 Atualizando página para limpar memória...")
-        driver.refresh()
-        time.sleep(3)
-        # ------------------------------------------------
+        # REMOVIDO: O REFRESH QUE CAUSAVA O ERRO DE NAVEGAÇÃO
+        time.sleep(5) # Espera a tela estabilizar
 
         # 4. PLANEJAMENTO ALIMENTAR
         if dados_clinicos and (dados_clinicos.get("cafe") or dados_clinicos.get("almoco")):
             logger.info(">> Iniciando Fluxo de Planejamento...")
             
-            # Como demos refresh, precisamos esperar o botão aparecer de novo
             btn_add_planejamento = WebDriverWait(driver, 15).until(
                 EC.element_to_be_clickable((By.ID, "atalhoPlanejamento"))
             )
@@ -272,7 +264,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_confirmar)
             time.sleep(5) 
 
-            # Limpeza otimizada (max 3 loops)
+            # Limpeza
             logger.info(">> Limpando hábitos padrão...")
             for _ in range(3):
                 try:
@@ -288,6 +280,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                     break 
                 except Exception: pass
 
+            # FAVORITOS COM BLINDAGEM CONTRA TIMEOUT
             logger.info(">> Abrindo Favoritos/Refeições Prontas...")
             try:
                 driver.execute_script("window.scrollBy(0, -200);")
@@ -297,14 +290,17 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 ))
                 click_js(driver, btn_favoritas)
                 logger.info("Clicado em Favoritos.")
-                time.sleep(5) 
-            except Exception as e:
-                logger.warning(f"⚠️ Falha ao abrir Favoritos: {e}")
-                raise Exception("Menu de Favoritos não abriu.")
+                time.sleep(5)
+                
+                # SELEÇÃO
+                selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
+                selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
 
-            selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
-            selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
-            
+            except Exception as e:
+                # Se der erro aqui (timeout de memória), LOGA mas não mata o script, tenta salvar o que deu
+                logger.error(f"⚠️ Erro Crítico nos Favoritos (Memória/Timeout): {e}")
+                logger.info("Tentando pular para o salvamento final para não perder o cadastro...")
+
             logger.info(">> Ajustando horários...")
             definir_horario(driver, "horarioRotinaTemp0", "08:00")
             definir_horario(driver, "horarioRotinaTemp1", "12:00")
@@ -319,6 +315,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 except: pass
 
             logger.info(">> Salvando Prescrição...")
+            # Usa presence_of_element para garantir que ache mesmo se tiver overlay
             btn_salvar_final = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_salvar_final)
             time.sleep(1)
