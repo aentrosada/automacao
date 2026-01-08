@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 📝 CONFIGURAÇÃO DE LOGS (MODO DETETIVE 🕵️)
+# 📝 CONFIGURAÇÃO DE LOGS DETALHADOS
 # ==============================================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -34,8 +34,27 @@ def ler_credenciais():
     logger.info("--- 🔍 BUSCANDO CREDENCIAIS ---")
     email = os.getenv("LOGIN_WEBDIET")
     senha = os.getenv("SENHA_WEBDIET")
-    if email and senha: return email, senha
-    return None, None
+    
+    if email and senha:
+        logger.info("✅ Achei nas Variáveis de Ambiente!")
+        return email, senha
+
+    nome_arquivo = "login-web-diet.env"
+    if not os.path.exists(nome_arquivo):
+        if os.path.exists(".env"): nome_arquivo = ".env"
+        else: return None, None
+
+    try:
+        with open(nome_arquivo, "r", encoding="utf-8") as f:
+            for linha in f:
+                if "=" in linha:
+                    chave, valor = linha.strip().split("=", 1)
+                    if chave == "LOGIN_WEBDIET": email = valor
+                    elif chave == "SENHA_WEBDIET": senha = valor
+        return email, senha
+    except Exception as e:
+        logger.error(f"Erro ao ler arquivo de credenciais: {e}")
+        return None, None
 
 # --- MAPA DE REFEIÇÕES ---
 MAPA_REFEICOES = {
@@ -126,8 +145,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # 2. CADASTRO
         time.sleep(2)
         logger.info("2. Procurando botão 'Novo Paciente'...")
-        # LOG DO SELETOR:
-        logger.info("   > Seletor: CSS 'div[onclick*='novoPaciente']'")
         btn_novo = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[onclick*='novoPaciente']")))
         click_js(driver, btn_novo, "Botão Novo Paciente")
         
@@ -164,10 +181,10 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # 3. CAPTURA DE LINK
         time.sleep(2)
         logger.info("3. Tentando capturar Link...")
-        logger.info(f"   https://atual.com/: {driver.current_url}")
         try:
+            # Tenta fechar menu lateral se existir
             try:
-                logger.info("   > Verificando menu lateral (CSS: div[onclick*='não registrar'])...")
+                logger.info("   > Verificando menu lateral...")
                 btn_menu = driver.find_element(By.CSS_SELECTOR, "div[onclick*='não registrar']")
                 click_js(driver, btn_menu, "Fechar Menu Lateral")
             except: pass
@@ -184,10 +201,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info("4. Iniciando Bloco de Planejamento...")
             time.sleep(2) 
 
-            # AQUI ESTA O ERRO ANTERIOR
             logger.info("   > 🔍 Procurando botão 'atalhoPlanejamento' (ID)...")
-            logger.info(f"   https://atual.com/: {driver.current_url}")
-            
             try:
                 # Vamos tentar esperar VISIBILIDADE para ter certeza que carregou
                 btn_add = wait.until(EC.visibility_of_element_located((By.ID, "atalhoPlanejamento")))
@@ -195,7 +209,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 click_js(driver, btn_add, "Atalho Planejamento")
             except TimeoutException:
                 logger.error("❌ TIMEOUT: Botão 'atalhoPlanejamento' não apareceu na tela.")
-                logger.error("   Possíveis causas: Dashboard não carregou, Login caiu, ou modal travou.")
                 raise Exception("Falha ao encontrar botão de planejamento (atalhoPlanejamento)")
 
             time.sleep(1.5)
@@ -253,7 +266,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 # Segue o baile para tentar salvar o que deu
 
             # --- SELEÇÃO ---
-            # Função local para seleção com log detalhado
             def selecionar_com_log(categoria, codigos):
                 if not codigos: return
                 logger.info(f"   > Processando {categoria}: {codigos}")
@@ -270,7 +282,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
                         click_js(driver, el, f"Item {nome}")
                         
-                        # Confirmação
                         try:
                             btn_conf = WebDriverWait(driver, 2).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")))
                             click_js(driver, btn_conf, "Confirmar Item")
@@ -303,7 +314,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
             logger.info("   > Procurando botão SALVAR FINAL (div[onclick*='salvarPrescricao'])...")
             try:
-                # Usa presence para achar mesmo se estiver escondido
                 btn_final = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']")))
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_final)
                 time.sleep(0.5)
@@ -325,21 +335,26 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except: pass
 
 # ==============================================================================
-# API
+# API (CORRIGIDA PARA NÃO PEDIR USUARIO/SENHA NO BODY)
 # ==============================================================================
 app = FastAPI()
 
+# O MODELO AGORA SÓ PEDE OS DADOS DO PACIENTE
 class Payload(BaseModel):
-    usuario: str
-    senha: str
     paciente: dict
     dados_clinicos: dict
 
 @app.post("/cadastrar-paciente")
 def run(p: Payload, bt: BackgroundTasks):
-    ler_credenciais() # Log inicio
-    bt.add_task(executar_cadastro, p.usuario, p.senha, p.paciente, p.dados_clinicos)
-    return {"msg": "Rodando com logs detalhados..."}
+    # AS CREDENCIAIS SÃO LIDAS AQUI
+    creds = ler_credenciais()
+    
+    if not creds:
+        raise HTTPException(status_code=500, detail="Credenciais não encontradas no servidor (.env)")
+    
+    usuario, senha = creds
+    bt.add_task(executar_cadastro, usuario, senha, p.paciente, p.dados_clinicos)
+    return {"msg": "Rodando com logs extremos..."}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
