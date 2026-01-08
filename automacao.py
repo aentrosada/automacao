@@ -122,7 +122,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             
             # Confirmar seleção
             try:
-                # Botão confirmar padrão
                 btn_confirmar = WebDriverWait(driver, 2).until(EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
                 ))
@@ -130,7 +129,6 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
                 time.sleep(0.5)
                 logger.info(f"✅ Adicionado: {nome_real}")
             except TimeoutException:
-                # Retry
                 click_js(driver, elem)
                 time.sleep(0.5)
                 try:
@@ -153,16 +151,20 @@ def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg):
 
 # --- ROBÔ PRINCIPAL ---
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V9 (Com SISTEMA DE RESGATE) ---")
+    logger.info("--- ⚡ Iniciando Robô V10 (Modo Low Memory) ---")
     
     chrome_options = Options()
+    # CONFIGURAÇÕES PARA ECONOMIZAR MEMÓRIA
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-software-rasterizer") # Novo
+    chrome_options.add_argument("--window-size=1366,768") # Menor resolução consome menos RAM
     chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
     chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-notifications") # Novo
+    chrome_options.add_argument("--disable-application-cache") # Novo
     chrome_options.page_load_strategy = 'eager'
 
     driver = webdriver.Chrome(options=chrome_options)
@@ -208,16 +210,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
         
         try:
-            # Tenta JS direto
             WebDriverWait(driver, 10).until(
                 EC.visibility_of_element_located((By.XPATH, "//div[contains(text(), 'registrar nova consulta')]"))
             )
-            logger.info("✅ Modal visível! Executando confirmação via JS...")
+            logger.info("✅ Modal visível! Executando JS...")
             driver.execute_script("swal.clickConfirm()")
             time.sleep(3) 
 
         except TimeoutException:
-            logger.warning("⚠️ Modal demorou ou não apareceu.")
+            logger.warning("⚠️ Modal não apareceu (pode ter sido rápido).")
 
         # 4. TENTATIVA DE ACESSO AO PLANEJAMENTO (COM RESGATE)
         logger.info(">> Buscando tela de Planejamento...")
@@ -228,49 +229,39 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info("✅ Entramos direto!")
         
         except TimeoutException:
-            # ==================================================================
-            # 🚨 PROTOCOLO DE RESGATE (O PULO DO GATO)
-            # ==================================================================
-            logger.warning("⚠️ Botão de planejamento não apareceu. ATIVANDO RESGATE...")
+            # 🚨 PROTOCOLO DE RESGATE
+            logger.warning("⚠️ Botão de planejamento sumiu. ATIVANDO RESGATE...")
             
-            # Se não achou o planejamento, estamos presos na lista de pacientes (Dashboard).
-            # Vamos achar o nome do paciente na lista e clicar nele!
             try:
-                # Fecha qualquer modal que tenha sobrado
                 try: driver.execute_script("swal.close()") 
                 except: pass
                 
                 logger.info(f"   > Procurando paciente '{paciente['nome']}' na lista...")
                 
-                # XPath poderoso: Procura qualquer elemento de texto que tenha o nome exato
+                # XPath Genérico para o nome
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
-                
                 elem_nome = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xpath_nome)))
                 
-                # Scroll e click
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
                 click_js(driver, elem_nome)
-                logger.info("✅ RESGATE SUCESSO: Clicamos no nome do paciente!")
+                logger.info("✅ RESGATE SUCESSO!")
                 
-                time.sleep(3) # Tempo para abrir o perfil
+                time.sleep(3)
                 
-                # Agora tenta achar o botão de novo
                 btn_add = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "atalhoPlanejamento")))
                 logger.info("✅ Agora sim! Estamos no planejamento.")
                 
             except Exception as e_resgate:
                 logger.error(f"❌ FALHA TOTAL NO RESGATE: {e_resgate}")
-                raise Exception("Não foi possível acessar o paciente nem pelo modal, nem pela lista.")
+                raise Exception("Não foi possível acessar o paciente.")
 
         # ======================================================================
         # DAQUI PRA FRENTE É O FLUXO NORMAL
         # ======================================================================
 
-        # Clica no planejamento (que já achamos acima)
         click_js(driver, btn_add)
         time.sleep(1.5)
 
-        # Captura link (tenta agora que estamos dentro)
         try:
             el_link = driver.find_element(By.ID, "linkRef")
             link_app_capturado = el_link.text.strip()
