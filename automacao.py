@@ -104,7 +104,7 @@ def definir_horario(driver, element_id, horario):
     except Exception as e:
         logger.warning(f"Erro ao definir horário: {e}")
 
-# --- FUNÇÃO DE SELEÇÃO CORRIGIDA ---
+# --- FUNÇÃO DE SELEÇÃO OTIMIZADA ---
 def selecionar_itens(driver, wait, categoria, codigos_brutos):
     if not codigos_brutos: return
     logger.info(f">> Processando categoria: {categoria} com códigos: {codigos_brutos}")
@@ -119,24 +119,23 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         try:
             logger.info(f"Procurando item: {nome_real}")
             
-            # ATUALIZADO: Busca pelo SPAN que contém o texto exato
-            # O texto pode ter espaços extras, então usamos contains
+            # Busca pelo SPAN que contém o texto exato
             xpath_item = f"//span[contains(text(), '{nome_real}')]"
             
-            # Tenta encontrar o elemento
+            # Tenta encontrar o elemento (Timeout curto pois a lista já deve estar aberta)
             elem = WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.XPATH, xpath_item))
             )
             
-            # Scroll para garantir visibilidade
+            # Scroll suave para garantir que o item esteja no meio da tela
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             time.sleep(0.5)
             
-            # Clica no SPAN (ou no pai dele se o span não for clicável, mas click_js resolve)
+            # Clica no SPAN
             click_js(driver, elem)
             logger.info(f"Clicado em: {nome_real}")
             
-            # ATUALIZADO: Espera o botão CONFIRMAR do SweetAlert aparecer
+            # Espera o botão CONFIRMAR do SweetAlert aparecer
             time.sleep(1) 
             try:
                 # O botão confirmar tem onclick="swal.clickConfirm()"
@@ -144,10 +143,9 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
                     (By.XPATH, "//div[contains(@onclick, 'swal.clickConfirm()')]")
                 ))
                 click_js(driver, btn_confirmar)
-                logger.info("Confirmado.")
-                time.sleep(1.5) # Tempo para o modal fechar e a lista atualizar
+                time.sleep(1) # Tempo para o modal fechar
             except TimeoutException:
-                logger.warning("Botão de confirmar não apareceu (pode já ter sido selecionado).")
+                pass # Se não pediu confirmação, segue o baile
             
         except Exception as e:
             logger.error(f"Erro ao selecionar item {nome_real}: {e}")
@@ -289,19 +287,32 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                         time.sleep(2)
                 except: pass 
 
-            # ATUALIZADO: ABRIR FAVORITOS
+            # ABRIR FAVORITOS (CORREÇÃO DE CLIQUE E SCROLL)
             logger.info(">> Abrindo Favoritos/Refeições Prontas...")
             try:
-                # Busca pelo texto ou pelo onclick especifico
-                btn_favoritas = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//div[contains(@onclick, 'verRefeicoesProntas') or contains(text(), 'refeições favoritas')]")
-                ))
-                click_js(driver, btn_favoritas)
-                time.sleep(4) # Importante: tempo para carregar a lista lateral
-            except Exception as e:
-                logger.warning(f"Não consegui clicar em favoritos: {e}")
+                # 1. Rola um pouco para cima para garantir que o rodapé não cubra o botão
+                driver.execute_script("window.scrollBy(0, -200);")
+                time.sleep(1)
 
-            # Seleção dos itens (COM A CORREÇÃO DOS SPANS)
+                # 2. Busca o botão pelo texto (mais seguro que onclick complexo)
+                # Tenta o XPath pelo texto exato visível
+                btn_favoritas = wait.until(EC.element_to_be_clickable(
+                    (By.XPATH, "//div[contains(., 'refeições favoritas') and contains(@class, 'botao')]")
+                ))
+                
+                # 3. Força o clique via JS
+                click_js(driver, btn_favoritas)
+                logger.info("Clicado em Favoritos.")
+                
+                # 4. Espera a lista carregar (Importante!)
+                time.sleep(5) 
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao abrir Favoritos: {e}")
+                # Se falhar ao abrir a lista, lançamos erro para não tentar buscar itens invisíveis
+                raise Exception("Menu de Favoritos não abriu.")
+
+            # Seleção dos itens
             selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
             selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
             
