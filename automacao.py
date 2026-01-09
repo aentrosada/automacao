@@ -60,12 +60,14 @@ def verificar_erro_formulario(driver):
     except: pass
     return None
 
-def enviar_webhook(msg, status, link=None):
+def enviar_webhook(msg, status, link=None, erro_detalhe=None):
     if not WEBHOOK_MAKE_URL: return
-    try: requests.post(WEBHOOK_MAKE_URL, json={"msg": msg, "status": status, "link": link}, timeout=5)
+    try: 
+        payload = {"msg": msg, "status": status, "link": link, "erro": erro_detalhe}
+        requests.post(WEBHOOK_MAKE_URL, json=payload, timeout=5)
     except: pass
 
-# --- MEAL MAP (EXACT TEXT FROM YOUR HTML) ---
+# --- MEAL MAP ---
 MAPA_REFEICOES = {
     "cafe": {
         "op1": "PENDENTE", 
@@ -103,38 +105,29 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         if not nome_real: continue
         
         try:
-            # 1. Search for the SPAN with the exact text
             xpath_span = f"//span[contains(text(), '{nome_real}')]"
             span_element = wait.until(EC.presence_of_element_located((By.XPATH, xpath_span)))
-            
-            # 2. Go up to the parent DIV (the one with class itemLista and onclick event)
-            # This is critical based on the HTML you sent
             parent_div = span_element.find_element(By.XPATH, "./ancestor::div[contains(@class, 'itemLista')]")
             
-            # Scroll and Click
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", parent_div)
             click_js(driver, parent_div)
-            logger.info(f"   > Clicked on item: {nome_real}")
             
-            # 3. Confirm (Small modal opens for each item)
             time.sleep(0.5)
             try:
-                # Based on your HTML: onclick="swal.clickConfirm()"
                 btn_confirmar = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")))
                 click_js(driver, btn_confirmar)
                 time.sleep(0.5)
             except:
-                # Redundancy: Execute JS directly if button is tricky
                 driver.execute_script("swal.clickConfirm()")
                 
         except Exception as e:
             logger.warning(f"⚠️ Failed to add {nome_real}: {e}")
 
 # ==============================================================================
-# 🤖 MAIN ROBOT (V26 - HTML TARGETED)
+# 🤖 MAIN ROBOT (V27 - UNIVERSAL SEARCH RESGATE)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Starting Robot V26 (Targeted HTML Structure) ---")
+    logger.info("--- ⚡ Starting Robot V27 (Universal Search Resgate) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -163,7 +156,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         time.sleep(2)
 
-        # 3. FILL FORM (Human Typing)
+        # 3. FILL FORM
         logger.info(f">> Filling data for: {paciente['nome']}")
         digitar_humano(driver, "nomeAtalho", paciente['nome'])
         try:
@@ -188,12 +181,11 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             if msg: raise Exception(f"Form Error: {msg}")
             logger.warning("⚠️ Button persisted, attempting to proceed...")
 
-        # 5. TRANSITION (CONSULTATION MODAL)
+        # 5. TRANSITION
         logger.info(">> Waiting for Consultation Modal (3s)...")
         time.sleep(3)
         
         try:
-            # Based on your HTML: onclick="swal.clickConfirm()" inside a div with text "registrar nova consulta"
             xpath_modal = "//div[contains(text(), 'registrar nova consulta')]"
             btn_modal = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xpath_modal)))
             click_js(driver, btn_modal)
@@ -202,44 +194,67 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.warning("⚠️ Modal click failed (trying direct JS)...")
             driver.execute_script("swal.clickConfirm()")
 
-        # 6. WAIT FOR PROFILE PAGE LOAD
+        # 6. WAIT FOR PROFILE PAGE
         logger.info(">> ⏳ Waiting for profile page load (URL change)...")
         time.sleep(5)
-        # Ensure we are out of the dashboard list
-        try:
-            # Zoom out to ensure elements are visible
-            driver.execute_script("document.body.style.zoom='70%'")
+        try: driver.execute_script("document.body.style.zoom='70%'")
         except: pass
 
-        # 7. ENTER PLANNING (TARGETED ID)
+        # 7. ENTER PLANNING (WITH UNIVERSAL SEARCH RESGATE)
         logger.info(">> Looking for Planning Button...")
         
         try:
-            # ID from your HTML: atalhoPlanejamento
             btn_add = WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_add)
             logger.info("✅ Entered Planning (Direct ID)!")
         except:
-            # RESGATE VIA SEARCH (Last Resort)
-            logger.warning("⚠️ Button not found. Trying RESGATE VIA SEARCH...")
+            logger.warning("⚠️ Button not found. Trying RESGATE VIA UNIVERSAL SEARCH...")
             try:
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
-                search_box = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='search'], input[placeholder*='usque']")))
+                # BUSCA UNIVERSAL: Procura qualquer input de texto visível que possa ser busca
+                logger.info("   > Searching for search box...")
+                
+                # Lista de seletores possíveis para a busca
+                seletores_busca = [
+                    "input[type='search']",
+                    "input[placeholder*='usque']", # "Busque" ou "Pesquise"
+                    "input[placeholder*='nome']",
+                    ".dataTables_filter input"
+                ]
+                
+                search_box = None
+                for sel in seletores_busca:
+                    try:
+                        elementos = driver.find_elements(By.CSS_SELECTOR, sel)
+                        for el in elementos:
+                            if el.is_displayed():
+                                search_box = el
+                                break
+                        if search_box: break
+                    except: continue
+                
+                if not search_box:
+                    raise Exception("Could not find search box for resgate.")
+
                 search_box.clear()
                 search_box.send_keys(paciente['nome'])
                 search_box.send_keys(Keys.ENTER)
-                time.sleep(3)
+                time.sleep(4)
                 
+                # Clica no primeiro resultado que contém o nome
                 xpath_res = f"//*[contains(text(), '{paciente['nome']}')]"
                 driver.find_element(By.XPATH, xpath_res).click()
                 
                 time.sleep(5)
+                # Tenta achar o botão de novo
                 btn_final = driver.find_element(By.ID, "atalhoPlanejamento")
                 click_js(driver, btn_final)
                 logger.info("✅ Accessed via Search Resgate!")
+                
             except Exception as e:
+                # Se falhar tudo, tenta URL direta (se conseguirmos o ID no futuro)
                 raise Exception(f"Critical failure accessing patient profile: {e}")
 
         # 8. DIET CREATION FLOW
@@ -250,12 +265,9 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info(f"✅ Link Captured: {link_app}")
         except: pass
 
-        # Initial Modals (Next -> Confirm)
         try:
-            # Based on HTML: onclick="swal.clickConfirm()" with text "avançar"
             click_js(driver, WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]"))))
             time.sleep(1)
-            # Based on HTML: id="criarPlanejamento"
             click_js(driver, driver.find_element(By.ID, "criarPlanejamento"))
         except: pass
         
@@ -275,14 +287,12 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # Favorites
         logger.info(">> Adding Favorites...")
         driver.execute_script("window.scrollTo(0, 0);")
-        # Click on "Refeições Favoritas" folder
         click_js(driver, WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='verRefeicoesProntas']"))))
         time.sleep(3)
         
         selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
         selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
         
-        # Close Modal
         try: driver.execute_script("document.querySelector('button.close[data-dismiss=\"modal\"]').click()")
         except: driver.execute_script("document.querySelector('.modal-backdrop').click()")
         
@@ -298,12 +308,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, driver.find_element(By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']"))
         
         logger.info("✅ TOTAL SUCCESS!")
-        enviar_webhook(paciente, dados_clinicos, link_app, "Sucesso Total")
+        enviar_webhook("Processo concluído", "Sucesso Total", link_app)
         return {"status": "sucesso", "link": link_app}
 
     except Exception as e:
         logger.error(f"❌ ERROR: {e}")
-        enviar_webhook(paciente, dados_clinicos, link_app, "Erro", str(e))
+        # Webhook de erro simplificado para não falhar
+        enviar_webhook(f"Erro: {str(e)}", "Erro")
         return {"status": "erro", "msg": str(e)}
     finally:
         try: driver.quit()
