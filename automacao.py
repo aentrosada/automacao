@@ -1,13 +1,14 @@
 import os
 import logging
 import traceback
+import subprocess
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -23,8 +24,17 @@ logger = logging.getLogger(__name__)
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
 # ==============================================================================
-# 🛠️ FUNÇÕES AUXILIARES
+# 🛠️ FUNÇÕES DE LIMPEZA E AUXILIARES
 # ==============================================================================
+def matar_zumbis():
+    """Mata processos do Chrome travados na memória para liberar RAM"""
+    try:
+        logger.info("🧹 Faxina: Matando processos órfãos do Chrome...")
+        subprocess.run(['pkill', '-f', 'chrome'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-f', 'chromedriver'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3) # Dá tempo para o sistema limpar a RAM
+    except: pass
+
 def ler_credenciais():
     email = os.getenv("LOGIN_WEBDIET")
     senha = os.getenv("SENHA_WEBDIET")
@@ -45,7 +55,7 @@ def digitar_humano(driver, id_elemento, texto):
         elem.clear()
         for char in texto:
             elem.send_keys(char)
-            time.sleep(0.05) 
+            time.sleep(0.02)
         elem.send_keys(Keys.TAB)
     except Exception as e:
         logger.error(f"Erro ao digitar em {id_elemento}: {e}")
@@ -99,22 +109,41 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V28 - FIDELIDADE AO VÍDEO)
+# 🤖 ROBÔ PRINCIPAL (V30 - RESILIENTE A FALHAS DE BOOT)
 # ==============================================================================
-def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V28 (Sem Busca - Clique Direto) ---")
-    
+def iniciar_driver():
+    """Tenta iniciar o Chrome com retry"""
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1366,768")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
+    chrome_options.add_argument("--window-size=1280,720")
+    chrome_options.page_load_strategy = 'eager'
     
-    driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 20)
-    link_app = "Não gerado"
+    for tentativa in range(3):
+        try:
+            driver = webdriver.Chrome(options=chrome_options)
+            driver.set_page_load_timeout(60)
+            return driver
+        except WebDriverException as e:
+            logger.warning(f"⚠️ Falha ao iniciar Chrome (Tentativa {tentativa+1}/3). Limpando e tentando de novo...")
+            matar_zumbis()
+            time.sleep(5)
+    raise Exception("Não foi possível iniciar o Chrome após 3 tentativas. Servidor sobrecarregado.")
 
+def executar_cadastro(usuario, senha, paciente, dados_clinicos):
+    matar_zumbis()
+    
+    logger.info("--- ⚡ Iniciando Robô V30 (Retry de Boot) ---")
+    
     try:
+        driver = iniciar_driver()
+        wait = WebDriverWait(driver, 20)
+        link_app = "Não gerado"
+
         # 1. LOGIN
         driver.get("https://pt.webdiet.com.br/login/")
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
@@ -127,12 +156,12 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
             click_js(driver, btn)
         except:
-            raise Exception("Falha ao abrir modal de cadastro.")
+            raise Exception("Falha ao abrir modal. O servidor pode estar lento.")
         
         time.sleep(2)
 
         # 3. PREENCHIMENTO
-        logger.info(f">> Digitando dados de: {paciente['nome']}")
+        logger.info(f">> Digitando: {paciente['nome']}")
         digitar_humano(driver, "nomeAtalho", paciente['nome'])
         try:
             sexo_letra = "M" if paciente['sexo'].lower().startswith('m') else "F"
@@ -149,78 +178,57 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         try:
             WebDriverWait(driver, 8).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
-            logger.info("✅ Botão sumiu (Sucesso).")
+            logger.info("✅ Cadastro enviado.")
         except:
             msg = verificar_erro_formulario(driver)
             if msg: raise Exception(f"Erro no formulário: {msg}")
-            logger.warning("⚠️ Botão persistiu, mas seguindo...")
+            logger.warning("⚠️ Botão persistiu.")
 
-        # 5. TRANSIÇÃO (O PONTO CRÍTICO)
-        logger.info(">> Aguardando Modal de Consulta (3s)...")
+        # 5. TRANSIÇÃO
+        logger.info(">> Aguardando Modal (3s)...")
         time.sleep(3)
-        
         try:
             xpath_modal = "//div[contains(text(), 'registrar nova consulta')]"
             btn_modal = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xpath_modal)))
             click_js(driver, btn_modal)
             logger.info("✅ Modal clicado!")
         except:
-            logger.warning("⚠️ Modal não clicado via elemento. Tentando JS direto...")
             driver.execute_script("swal.clickConfirm()")
 
-        # 6. VERIFICAÇÃO E RESGATE (SEM BUSCA)
+        # 6. VERIFICAÇÃO E RESGATE
         logger.info(">> Aguardando redirecionamento (10s)...")
         time.sleep(10)
         driver.execute_script("document.body.style.zoom='70%'")
 
-        # Tenta achar direto
         btn_planejamento = encontrar_botao_planejamento(driver, WebDriverWait(driver, 5))
         
         if btn_planejamento:
             click_js(driver, btn_planejamento)
             logger.info("✅ Entrou no planejamento (Direto)!")
         else:
-            # ==================================================================
-            # 🚨 RESGATE POR CLIQUE NO NOME (LISTA)
-            # ==================================================================
-            logger.warning("⚠️ Não redirecionou. O paciente deve ser o primeiro da lista.")
-            logger.warning(f"   > Procurando texto: '{paciente['nome']}'")
-            
+            logger.warning("⚠️ Iniciando RESGATE (Clique na lista)...")
             try:
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
-                # Procura o texto do nome na tela
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
                 elem_nome = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, xpath_nome)))
-                
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
                 
-                # Tenta clicar no PAI do elemento de texto (geralmente a linha ou card)
-                try:
-                    elem_pai = elem_nome.find_element(By.XPATH, "./..")
-                    click_js(driver, elem_pai)
-                    logger.info("✅ Clicado no PAI do nome.")
-                except:
-                    click_js(driver, elem_nome)
-                    logger.info("✅ Clicado no TEXTO do nome.")
+                try: elem_nome.find_element(By.XPATH, "./..").click() 
+                except: click_js(driver, elem_nome)
                 
-                # Espera abrir o perfil
+                logger.info("✅ Clique de resgate enviado.")
                 time.sleep(8)
                 
                 btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 15))
                 if btn_final:
                     click_js(driver, btn_final)
-                    logger.info("✅ Planejamento acessado via clique na lista!")
+                    logger.info("✅ Planejamento acessado!")
                 else:
-                    raise Exception("Não entrou no perfil mesmo clicando no nome.")
+                    raise Exception("Não entrou no perfil.")
 
             except Exception as e:
-                # DEBUG DE TELA SE FALHAR
-                logger.error("📸 DEBUG TELA:")
-                logger.error(f"URL: {driver.current_url}")
-                try: logger.error(f"HTML (Trecho): {driver.page_source[:500]}...")
-                except: pass
                 raise Exception(f"Falha crítica no resgate: {e}")
 
         # 7. EXECUÇÃO DA DIETA
@@ -240,6 +248,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(3)
 
         # Limpeza
+        logger.info(">> Limpando...")
         try:
             for _ in range(10):
                 lixeira = WebDriverWait(driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "i.fi-sr-trash")))
@@ -250,6 +259,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except: pass
 
         # Favoritos
+        logger.info(">> Inserindo...")
         driver.execute_script("window.scrollTo(0, 0);")
         click_js(driver, WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='verRefeicoesProntas']"))))
         time.sleep(3)
@@ -260,13 +270,13 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         try: driver.execute_script("document.querySelector('button.close[data-dismiss=\"modal\"]').click()")
         except: driver.execute_script("document.querySelector('.modal-backdrop').click()")
         
-        # Horários e Salvar
+        # Salvar
+        logger.info(">> Salvando final...")
         try:
             driver.execute_script("document.getElementById('horarioRotinaTemp0').value = '08:00';")
             driver.execute_script("document.getElementById('horarioRotinaTemp1').value = '12:00';")
         except: pass
         
-        logger.info(">> Salvando final...")
         time.sleep(1)
         click_js(driver, driver.find_element(By.CSS_SELECTOR, "div[onclick*='salvarPrescricao']"))
         
@@ -299,6 +309,10 @@ class PedidoCadastro(BaseModel):
 
 @app.post("/cadastrar-paciente")
 def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
+    if os.system("pgrep chrome > /dev/null") == 0:
+        logger.warning("⚠️ Sistema ocupado! Tentando limpar...")
+        matar_zumbis()
+    
     usuario, senha = ler_credenciais()
     background_tasks.add_task(executar_cadastro, usuario, senha, pedido.paciente.dict(), pedido.dados_clinicos)
     return {"mensagem": "Processando...", "paciente": pedido.paciente.nome}
