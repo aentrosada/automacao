@@ -74,9 +74,19 @@ def encontrar_botao_planejamento(driver, wait):
         except: continue
     return None
 
-def enviar_webhook(msg, status, link=None):
+# CORREÇÃO DO WEBHOOK PARA ACEITAR 5 ARGUMENTOS
+def enviar_webhook(paciente_dados, dados_clinicos, link_app, status_msg, erro_detalhe=None):
     if not WEBHOOK_MAKE_URL: return
-    try: requests.post(WEBHOOK_MAKE_URL, json={"msg": msg, "status": status, "link": link}, timeout=5)
+    try: 
+        payload = {
+            "status": status_msg, 
+            "link_app": link_app, 
+            "erro_detalhe": erro_detalhe,
+            "paciente": paciente_dados, 
+            "dados_clinicos": dados_clinicos
+        }
+        requests.post(WEBHOOK_MAKE_URL, json=payload, timeout=5)
+        logger.info(f"Webhook enviado: {status_msg}")
     except: pass
 
 # --- MAPAS ---
@@ -102,10 +112,10 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V22 - BUSCA AVANÇADA DE ELEMENTO)
+# 🤖 ROBÔ PRINCIPAL (V23 - RESGATE PAI & FIX WEBHOOK)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V22 (Busca Persistente) ---")
+    logger.info("--- ⚡ Iniciando Robô V23 (Resgate Estrutural) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -174,7 +184,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.warning("⚠️ Modal não clicado (tentando JS ou seguindo)...")
             driver.execute_script("swal.clickConfirm()")
 
-        # 6. ENTRAR NO PLANEJAMENTO (LÓGICA REFORÇADA)
+        # 6. ENTRAR NO PLANEJAMENTO (COM RESGATE ESTRUTURAL)
         logger.info(">> Buscando Planejamento...")
         time.sleep(3)
         driver.execute_script("document.body.style.zoom='70%'")
@@ -186,56 +196,64 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             click_js(driver, btn_planejamento)
             logger.info("✅ Entrou no planejamento (Direto)!")
         else:
-            logger.warning("⚠️ Iniciando RESGATE REFORÇADO...")
+            logger.warning("⚠️ Iniciando RESGATE NOVO...")
             
-            # --- RESGATE ---
+            # --- RESGATE ESTRUTURAL ---
             try:
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
-                # Clica no nome
-                xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
-                elem_nome = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xpath_nome)))
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
-                click_js(driver, elem_nome)
-                logger.info("✅ Resgate clicado. AGUARDANDO CARREGAMENTO (8s)...")
+                # Procura o texto do nome
+                logger.info(f"   > Procurando nome '{paciente['nome']}'...")
+                xpath_text = f"//*[contains(text(), '{paciente['nome']}')]"
                 
-                # ESPERA MAIOR AQUI
-                time.sleep(8) 
+                # TENTA CLICAR NO ELEMENTO PAI (CONTAINER)
+                # Muitas vezes o texto é só um span, o clique está na div/tr em volta
+                xpath_pai = f"{xpath_text}/.."
                 
-                # Tenta achar de novo com timeout maior (20s)
+                try:
+                    elem_pai = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xpath_pai)))
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_pai)
+                    click_js(driver, elem_pai)
+                    logger.info("✅ Resgate: Clicado no container do nome!")
+                except:
+                    # Se falhar o pai, clica no texto mesmo
+                    elem_text = driver.find_element(By.XPATH, xpath_text)
+                    click_js(driver, elem_text)
+                    logger.info("✅ Resgate: Clicado no texto do nome.")
+
+                logger.info("   > Aguardando 10s para carregamento...")
+                time.sleep(10)
+                
+                # Verifica sucesso
                 btn_resgate = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
-                
                 if btn_resgate:
                     click_js(driver, btn_resgate)
                     logger.info("✅ Planejamento acessado via Resgate!")
                 else:
-                    # ULTIMA TENTATIVA: REFRESH
-                    logger.warning("⚠️ Ainda não carregou. Tentando F5...")
+                    # Refresh e tenta de novo
+                    logger.warning("⚠️ Refreshing...")
                     driver.refresh()
                     time.sleep(5)
-                    btn_final_try = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
-                    if btn_final_try:
-                        click_js(driver, btn_final_try)
-                        logger.info("✅ Planejamento acessado após Refresh!")
+                    btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
+                    if btn_final:
+                        click_js(driver, btn_final)
+                        logger.info("✅ Acessado pós-refresh!")
                     else:
-                        raise Exception("Botão de planejamento não apareceu mesmo após resgate e refresh.")
+                        raise Exception("Falha: Botão de planejamento inalcançável.")
 
             except Exception as e:
-                # Debug final: o que tem na tela?
-                logger.error(f"TITULO DA PAGINA NO ERRO: {driver.title}")
-                logger.error(f"URL NO ERRO: {driver.current_url}")
+                logger.error(f"❌ URL FINAL: {driver.current_url}")
                 raise Exception(f"Falha no acesso ao paciente: {e}")
 
         # 7. EXECUÇÃO DA DIETA
-        time.sleep(3) # Espera animação de entrada
+        time.sleep(3)
         try:
             el_link = driver.find_element(By.ID, "linkRef")
             link_app = el_link.text.strip()
             logger.info(f"✅ Link: {link_app}")
         except: pass
 
-        # Confirmações iniciais
         try:
             click_js(driver, WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]"))))
             time.sleep(1)
