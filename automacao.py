@@ -107,11 +107,11 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V33 - SELETOR UNIVERSAL DE MODAL)
+# 🤖 ROBÔ PRINCIPAL (V34 - CLIQUE NUCLEAR)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     matar_zumbis()
-    logger.info("--- ⚡ Iniciando Robô V33 (Modal Universal) ---")
+    logger.info("--- ⚡ Iniciando Robô V34 (Nuclear Click) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -165,72 +165,79 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             if msg: raise Exception(f"Erro no formulário: {msg}")
             logger.warning("⚠️ Botão persistiu.")
 
-        # 5. TRANSIÇÃO (MODAL SWAL GENÉRICO)
-        logger.info(">> Aguardando Modal de Confirmação...")
-        
-        url_antes = driver.current_url
-        
+        # 5. TRANSIÇÃO (JS PURO NO MODAL)
+        logger.info(">> Disparando confirmação de modal via JS...")
+        time.sleep(2) # Espera modal renderizar no DOM
         try:
-            # PROCURA PELO BOTÃO AZUL/VERDE PADRÃO DO SWEETALERT
-            # A classe .swal2-confirm é padrão do sistema, não depende do texto
-            btn_modal = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.swal2-confirm, div.swal2-confirm")))
-            logger.info("✅ Modal detectado (via classe swal2-confirm). Clicando...")
-            click_js(driver, btn_modal)
-            
-            # Espera breve mudança
-            time.sleep(3)
-            
-        except TimeoutException:
-            logger.warning("⚠️ Modal não apareceu (Timeout) ou já redirecionou.")
-        except Exception as e:
-            logger.warning(f"⚠️ Erro leve ao clicar no modal: {e}")
+            # Força o clique no "Sim" do SweetAlert sem procurar o elemento
+            driver.execute_script("if(typeof swal !== 'undefined') { swal.clickConfirm(); }")
+            logger.info("✅ Comando JS enviado.")
+        except:
+            pass
 
-        # 6. ENTRAR NO PLANEJAMENTO (COM RESGATE)
-        logger.info(">> Verificando localização...")
-        driver.execute_script("document.body.style.zoom='70%'")
-
-        # Verifica se URL mudou
-        if driver.current_url != url_antes:
-             logger.info("✅ URL Mudou! Redirecionamento bem sucedido.")
-        else:
-             logger.warning("⚠️ URL não mudou. Estamos no Painel.")
-
-        # Tenta achar botão de planejamento direto
+        # 6. ENTRAR NO PLANEJAMENTO (COM RESGATE NUCLEAR)
+        logger.info(">> Aguardando carregamento (10s)...")
+        time.sleep(10)
+        
+        # Verifica se estamos na tela certa
+        url_atual = driver.current_url
+        if "painel" not in url_atual and "paciente" in url_atual:
+             logger.info("✅ Redirecionou para o paciente!")
+        
+        # Tenta achar botão direto
         try:
             btn_planejamento = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_planejamento)
             logger.info("✅ Entrou no planejamento (Direto)!")
         except:
             # ==================================================================
-            # 🚨 RESGATE INFALÍVEL
+            # 🚨 RESGATE NUCLEAR
             # ==================================================================
-            logger.warning("⚠️ Botão não visto. Clicando no PRIMEIRO paciente da lista...")
+            logger.warning("⚠️ Iniciando RESGATE (Limpando Overlays + Clique no Pai)...")
             try:
-                # Garante que modal fechou para não bloquear o clique
-                try: driver.execute_script("swal.close()")
-                except: pass
-                
-                # Procura o texto do nome
+                # 1. REMOVE OVERLAYS QUE POSSAM ESTAR BLOQUEANDO O CLIQUE
+                logger.info("   > Destruindo modais travados...")
+                driver.execute_script("""
+                    document.querySelectorAll('.swal2-container').forEach(e => e.remove());
+                    document.querySelectorAll('.modal-backdrop').forEach(e => e.remove());
+                    document.querySelectorAll('.swal-overlay').forEach(e => e.remove());
+                """)
+                time.sleep(1)
+
+                # 2. PROCURA O NOME
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
-                elem_nome = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, xpath_nome)))
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
+                elem_texto = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, xpath_nome)))
                 
-                logger.info("✅ Elemento do nome encontrado. Clicando...")
-                click_js(driver, elem_nome)
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_texto)
                 
-                time.sleep(8) # Espera carregar perfil
+                # 3. TENTA PEGAR O CONTAINER (CARD OU TR)
+                # A estratégia é subir nos pais até achar algo clicável (div ou tr)
+                try:
+                    # Tenta clicar no elemento pai (TR ou DIV Wrapper)
+                    elem_clique = elem_texto.find_element(By.XPATH, "./ancestor::div[contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'box')]")
+                    logger.info("   > Container Pai encontrado.")
+                except:
+                    # Se falhar, tenta o pai direto
+                    elem_clique = elem_texto.find_element(By.XPATH, "..")
+                    logger.info("   > Container Pai direto selecionado.")
+
+                # 4. CLIQUE JS FORÇADO
+                logger.info("   > CLICANDO...")
+                click_js(driver, elem_clique)
                 
-                # Agora procura o botão novamente
-                btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
+                # Espera carregar perfil
+                time.sleep(8)
+                
+                btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 15))
                 if btn_final:
                     click_js(driver, btn_final)
                     logger.info("✅ Planejamento acessado via Resgate!")
                 else:
-                    # Se falhar, tenta o botão de "Adicionar Planejamento" genérico da página do paciente
-                    raise Exception("Não entrou no perfil (Botão de planejamento não achado).")
+                    # Tenta clicar no botão de adicionar planejamento que fica no menu lateral as vezes
+                    raise Exception("Não entrou no perfil (Botão não apareceu).")
 
             except Exception as e:
-                # Print do HTML para debug final se falhar aqui
+                # Debug HTML
                 raise Exception(f"Falha crítica no resgate: {e}")
 
         # 7. EXECUÇÃO DA DIETA
