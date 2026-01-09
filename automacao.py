@@ -8,7 +8,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -27,12 +27,10 @@ WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 # 🛠️ FUNÇÕES DE LIMPEZA E AUXILIARES
 # ==============================================================================
 def matar_zumbis():
-    """Mata processos do Chrome travados na memória para liberar RAM"""
     try:
-        logger.info("🧹 Faxina: Matando processos órfãos do Chrome...")
         subprocess.run(['pkill', '-f', 'chrome'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['pkill', '-f', 'chromedriver'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2) # Dá tempo para o sistema limpar a RAM
+        time.sleep(2) 
     except: pass
 
 def ler_credenciais():
@@ -55,7 +53,7 @@ def digitar_humano(driver, id_elemento, texto):
         elem.clear()
         for char in texto:
             elem.send_keys(char)
-            time.sleep(0.02) # Mais rápido para economizar tempo
+            time.sleep(0.01)
         elem.send_keys(Keys.TAB)
     except Exception as e:
         logger.error(f"Erro ao digitar em {id_elemento}: {e}")
@@ -109,27 +107,20 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V29 - O EXTERMINADOR DE ZUMBIS)
+# 🤖 ROBÔ PRINCIPAL (V32 - MODAL INSISTENTE)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    # 1. LIMPEZA DE MEMÓRIA (CRÍTICO)
     matar_zumbis()
-    
-    logger.info("--- ⚡ Iniciando Robô V29 (Gerenciamento de Memória) ---")
+    logger.info("--- ⚡ Iniciando Robô V32 (Foco no Modal) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false") # Sem imagens
-    chrome_options.add_argument("--window-size=1280,720") # Resolução menor gasta menos RAM
-    chrome_options.page_load_strategy = 'eager' # Não espera carregar tudo
+    chrome_options.add_argument("--window-size=1280,720")
     
     driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(60) # Se travar 60s, mata.
-    
+    driver.set_page_load_timeout(60)
     wait = WebDriverWait(driver, 20)
     link_app = "Não gerado"
 
@@ -174,53 +165,74 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             if msg: raise Exception(f"Erro no formulário: {msg}")
             logger.warning("⚠️ Botão persistiu.")
 
-        # 5. TRANSIÇÃO
-        logger.info(">> Aguardando Modal (3s)...")
-        time.sleep(3)
+        # 5. TRANSIÇÃO (MODAL DE NOVA CONSULTA)
+        logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
+        
+        url_antes = driver.current_url
+        redirecionou = False
+        
         try:
-            xpath_modal = "//div[contains(text(), 'registrar nova consulta')]"
-            btn_modal = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xpath_modal)))
-            click_js(driver, btn_modal)
-            logger.info("✅ Modal clicado!")
-        except:
+            # Espera o texto aparecer para garantir que o modal carregou
+            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'registrar nova consulta')]")))
+            
+            # TENTA CLICAR VIA JS (Mais garantido que clicar no elemento)
+            logger.info(">> Modal detectado. Executando swal.clickConfirm()...")
             driver.execute_script("swal.clickConfirm()")
+            
+            # Monitora mudança de URL
+            for i in range(15):
+                time.sleep(1)
+                if driver.current_url != url_antes:
+                    logger.info("✅ URL Mudou! Redirecionamento funcionou.")
+                    redirecionou = True
+                    break
+            
+            # Se não mudou, tenta clicar no elemento físico
+            if not redirecionou:
+                logger.warning("⚠️ URL não mudou. Tentando clicar no botão físico...")
+                btn_modal = driver.find_element(By.XPATH, "//div[contains(text(), 'registrar nova consulta')]")
+                click_js(driver, btn_modal)
+                time.sleep(5)
 
-        # 6. VERIFICAÇÃO E RESGATE
-        logger.info(">> Aguardando redirecionamento (10s)...")
-        time.sleep(10)
+        except TimeoutException:
+            logger.warning("⚠️ Modal não apareceu a tempo (ou site já redirecionou).")
+
+        # 6. ENTRAR NO PLANEJAMENTO
+        logger.info(">> Buscando Planejamento...")
         driver.execute_script("document.body.style.zoom='70%'")
 
-        # Tenta achar direto
+        # Verifica se estamos na tela certa
         btn_planejamento = encontrar_botao_planejamento(driver, WebDriverWait(driver, 5))
         
         if btn_planejamento:
             click_js(driver, btn_planejamento)
             logger.info("✅ Entrou no planejamento (Direto)!")
         else:
-            logger.warning("⚠️ Iniciando RESGATE (Clique na lista)...")
+            # ==================================================================
+            # 🚨 RESGATE SEM REFRESH (CLIQUE NO NOME NA LISTA)
+            # ==================================================================
+            logger.warning("⚠️ Ainda no Painel. Clicando no PRIMEIRO paciente da lista...")
             try:
+                # Garante que modal fechou
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
-                # Procura o texto do nome e clica no PAI (Card)
+                # Clica no texto do nome
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
                 elem_nome = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, xpath_nome)))
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
                 
-                try:
-                    elem_nome.find_element(By.XPATH, "./..").click() # Clica no pai
-                except:
-                    click_js(driver, elem_nome) # Clica no texto
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
+                click_js(driver, elem_nome)
                 
                 logger.info("✅ Clique de resgate enviado.")
-                time.sleep(8)
+                time.sleep(8) # Espera carregar perfil
                 
                 btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 15))
                 if btn_final:
                     click_js(driver, btn_final)
                     logger.info("✅ Planejamento acessado!")
                 else:
-                    raise Exception("Não entrou no perfil.")
+                    raise Exception("Não entrou no perfil (Botão de planejamento não achado).")
 
             except Exception as e:
                 raise Exception(f"Falha crítica no resgate: {e}")
@@ -303,10 +315,8 @@ class PedidoCadastro(BaseModel):
 
 @app.post("/cadastrar-paciente")
 def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
-    # Se receber muitas requisições, rejeita se o sistema estiver ocupado
     if os.system("pgrep chrome > /dev/null") == 0:
-        logger.warning("⚠️ Sistema ocupado! Tentando matar processos antigos...")
-        matar_zumbis() # Tenta limpar para aceitar a nova, mas é arriscado
+        matar_zumbis()
     
     usuario, senha = ler_credenciais()
     background_tasks.add_task(executar_cadastro, usuario, senha, pedido.paciente.dict(), pedido.dados_clinicos)
