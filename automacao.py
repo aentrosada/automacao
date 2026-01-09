@@ -37,7 +37,6 @@ def click_js(driver, elemento):
     except: pass
 
 def digitar_humano(driver, id_elemento, texto):
-    """Clica, limpa e digita caractere por caractere para ativar máscaras"""
     try:
         elem = driver.find_element(By.ID, id_elemento)
         elem.click()
@@ -57,6 +56,22 @@ def verificar_erro_formulario(driver):
             logger.error(f"❌ O SITE RECUSOU O CADASTRO: '{msg}'")
             return msg
     except: pass
+    return None
+
+def encontrar_botao_planejamento(driver, wait):
+    """Tenta encontrar o botão de planejamento por ID, Texto ou Classe"""
+    seletores = [
+        (By.ID, "atalhoPlanejamento"),
+        (By.XPATH, "//div[contains(text(), 'adicionar') and contains(text(), 'planejamento')]"),
+        (By.XPATH, "//div[contains(text(), 'planejamento')]"),
+        (By.CSS_SELECTOR, ".cardMenuPaciente")
+    ]
+    
+    for by, valor in seletores:
+        try:
+            btn = wait.until(EC.element_to_be_clickable((by, valor)))
+            return btn
+        except: continue
     return None
 
 def enviar_webhook(msg, status, link=None):
@@ -87,10 +102,10 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V21 - ANTI-STALE)
+# 🤖 ROBÔ PRINCIPAL (V22 - BUSCA AVANÇADA DE ELEMENTO)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V21 (Correção Stale Element) ---")
+    logger.info("--- ⚡ Iniciando Robô V22 (Busca Persistente) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -108,7 +123,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
         driver.find_element(By.ID, "senhaLogin").send_keys(senha + Keys.ENTER)
         
-        # 2. ABRIR NOVO PACIENTE
+        # 2. CADASTRO
         logger.info(">> Abrindo formulário...")
         try:
             WebDriverWait(driver, 30).until(EC.url_contains("painel"))
@@ -119,44 +134,34 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         
         time.sleep(2)
 
-        # 3. PREENCHIMENTO HUMANO
+        # 3. PREENCHIMENTO
         logger.info(f">> Digitando dados de: {paciente['nome']}")
         digitar_humano(driver, "nomeAtalho", paciente['nome'])
-        
         try:
             sexo_letra = "M" if paciente['sexo'].lower().startswith('m') else "F"
             driver.find_element(By.ID, "generoAtalho").send_keys(sexo_letra)
         except: pass
-
-        logger.info(">> Digitando Data de Nascimento...")
         digitar_humano(driver, "nascimentoAtalho", "01011990")
         digitar_humano(driver, "telefoneAtalho", "11999999999")
         digitar_humano(driver, "emailAtalho", paciente['email'])
 
-        # 4. TENTATIVA DE SALVAR COM PROTEÇÃO STALE
+        # 4. SALVAR
         logger.info(">> Clicando em CADASTRAR...")
-        
-        # Pega o botão fresco antes de clicar
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
         
-        # --- AQUI ESTÁ A CORREÇÃO V21 ---
         logger.info(">> Validando envio...")
         try:
-            # Espera o botão sumir. Se der Stale, significa que sumiu também (Sucesso)
             WebDriverWait(driver, 5).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
             logger.info("✅ Botão sumiu/mudou (Sucesso).")
         except StaleElementReferenceException:
-            logger.info("✅ Botão ficou obsoleto (Isso é SUCESSO, a página mudou).")
+            logger.info("✅ Botão ficou obsoleto (Sucesso).")
         except TimeoutException:
-            # Se deu timeout, o botão ainda está lá intacto. Erro de formulário?
             msg_erro = verificar_erro_formulario(driver)
-            if msg_erro: 
-                raise Exception(f"Erro no formulário: {msg_erro}")
-            else:
-                logger.warning("⚠️ Botão continua na tela sem erro visível. Tentando seguir...")
+            if msg_erro: raise Exception(f"Erro no formulário: {msg_erro}")
+            else: logger.warning("⚠️ Botão continua na tela. Tentando seguir...")
 
-        # 5. TRANSIÇÃO (MODAL DE CONSULTA)
+        # 5. TRANSIÇÃO (MODAL)
         logger.info(">> Aguardando Modal de Consulta (3s)...")
         time.sleep(3)
         
@@ -169,42 +174,68 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.warning("⚠️ Modal não clicado (tentando JS ou seguindo)...")
             driver.execute_script("swal.clickConfirm()")
 
-        # 6. ENTRAR NO PLANEJAMENTO (COM RESGATE)
+        # 6. ENTRAR NO PLANEJAMENTO (LÓGICA REFORÇADA)
         logger.info(">> Buscando Planejamento...")
         time.sleep(3)
         driver.execute_script("document.body.style.zoom='70%'")
 
-        try:
-            btn_add = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-            click_js(driver, btn_add)
-            logger.info("✅ Entrou no planejamento!")
-        except:
-            logger.warning("⚠️ Iniciando RESGATE pelo nome...")
+        # Tenta achar o botão de várias formas
+        btn_planejamento = encontrar_botao_planejamento(driver, WebDriverWait(driver, 5))
+        
+        if btn_planejamento:
+            click_js(driver, btn_planejamento)
+            logger.info("✅ Entrou no planejamento (Direto)!")
+        else:
+            logger.warning("⚠️ Iniciando RESGATE REFORÇADO...")
+            
+            # --- RESGATE ---
             try:
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
+                # Clica no nome
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
                 elem_nome = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xpath_nome)))
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
                 click_js(driver, elem_nome)
-                logger.info("✅ Resgate clicado.")
+                logger.info("✅ Resgate clicado. AGUARDANDO CARREGAMENTO (8s)...")
                 
-                time.sleep(4)
-                btn_add = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-                click_js(driver, btn_add)
-                logger.info("✅ Planejamento acessado!")
+                # ESPERA MAIOR AQUI
+                time.sleep(8) 
+                
+                # Tenta achar de novo com timeout maior (20s)
+                btn_resgate = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
+                
+                if btn_resgate:
+                    click_js(driver, btn_resgate)
+                    logger.info("✅ Planejamento acessado via Resgate!")
+                else:
+                    # ULTIMA TENTATIVA: REFRESH
+                    logger.warning("⚠️ Ainda não carregou. Tentando F5...")
+                    driver.refresh()
+                    time.sleep(5)
+                    btn_final_try = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
+                    if btn_final_try:
+                        click_js(driver, btn_final_try)
+                        logger.info("✅ Planejamento acessado após Refresh!")
+                    else:
+                        raise Exception("Botão de planejamento não apareceu mesmo após resgate e refresh.")
+
             except Exception as e:
-                raise Exception(f"Falha no cadastro/redirecionamento. Verifique se o paciente foi criado. Erro: {e}")
+                # Debug final: o que tem na tela?
+                logger.error(f"TITULO DA PAGINA NO ERRO: {driver.title}")
+                logger.error(f"URL NO ERRO: {driver.current_url}")
+                raise Exception(f"Falha no acesso ao paciente: {e}")
 
         # 7. EXECUÇÃO DA DIETA
-        time.sleep(2)
+        time.sleep(3) # Espera animação de entrada
         try:
             el_link = driver.find_element(By.ID, "linkRef")
             link_app = el_link.text.strip()
             logger.info(f"✅ Link: {link_app}")
         except: pass
 
+        # Confirmações iniciais
         try:
             click_js(driver, WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]"))))
             time.sleep(1)
@@ -250,11 +281,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
     except Exception as e:
         logger.error(f"❌ ERRO: {e}")
-        try:
-            msg_erro = verificar_erro_formulario(driver)
-            if msg_erro: logger.error(f"ERRO VISÍVEL: {msg_erro}")
-        except: pass
-        
         enviar_webhook(paciente, dados_clinicos, link_app, "Erro", str(e))
         return {"status": "erro", "msg": str(e)}
     finally:
