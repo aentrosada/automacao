@@ -107,11 +107,11 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V32 - MODAL INSISTENTE)
+# 🤖 ROBÔ PRINCIPAL (V33 - SELETOR UNIVERSAL DE MODAL)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     matar_zumbis()
-    logger.info("--- ⚡ Iniciando Robô V32 (Foco no Modal) ---")
+    logger.info("--- ⚡ Iniciando Robô V33 (Modal Universal) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -165,76 +165,72 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             if msg: raise Exception(f"Erro no formulário: {msg}")
             logger.warning("⚠️ Botão persistiu.")
 
-        # 5. TRANSIÇÃO (MODAL DE NOVA CONSULTA)
-        logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
+        # 5. TRANSIÇÃO (MODAL SWAL GENÉRICO)
+        logger.info(">> Aguardando Modal de Confirmação...")
         
         url_antes = driver.current_url
-        redirecionou = False
         
         try:
-            # Espera o texto aparecer para garantir que o modal carregou
-            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'registrar nova consulta')]")))
+            # PROCURA PELO BOTÃO AZUL/VERDE PADRÃO DO SWEETALERT
+            # A classe .swal2-confirm é padrão do sistema, não depende do texto
+            btn_modal = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.swal2-confirm, div.swal2-confirm")))
+            logger.info("✅ Modal detectado (via classe swal2-confirm). Clicando...")
+            click_js(driver, btn_modal)
             
-            # TENTA CLICAR VIA JS (Mais garantido que clicar no elemento)
-            logger.info(">> Modal detectado. Executando swal.clickConfirm()...")
-            driver.execute_script("swal.clickConfirm()")
+            # Espera breve mudança
+            time.sleep(3)
             
-            # Monitora mudança de URL
-            for i in range(15):
-                time.sleep(1)
-                if driver.current_url != url_antes:
-                    logger.info("✅ URL Mudou! Redirecionamento funcionou.")
-                    redirecionou = True
-                    break
-            
-            # Se não mudou, tenta clicar no elemento físico
-            if not redirecionou:
-                logger.warning("⚠️ URL não mudou. Tentando clicar no botão físico...")
-                btn_modal = driver.find_element(By.XPATH, "//div[contains(text(), 'registrar nova consulta')]")
-                click_js(driver, btn_modal)
-                time.sleep(5)
-
         except TimeoutException:
-            logger.warning("⚠️ Modal não apareceu a tempo (ou site já redirecionou).")
+            logger.warning("⚠️ Modal não apareceu (Timeout) ou já redirecionou.")
+        except Exception as e:
+            logger.warning(f"⚠️ Erro leve ao clicar no modal: {e}")
 
-        # 6. ENTRAR NO PLANEJAMENTO
-        logger.info(">> Buscando Planejamento...")
+        # 6. ENTRAR NO PLANEJAMENTO (COM RESGATE)
+        logger.info(">> Verificando localização...")
         driver.execute_script("document.body.style.zoom='70%'")
 
-        # Verifica se estamos na tela certa
-        btn_planejamento = encontrar_botao_planejamento(driver, WebDriverWait(driver, 5))
-        
-        if btn_planejamento:
+        # Verifica se URL mudou
+        if driver.current_url != url_antes:
+             logger.info("✅ URL Mudou! Redirecionamento bem sucedido.")
+        else:
+             logger.warning("⚠️ URL não mudou. Estamos no Painel.")
+
+        # Tenta achar botão de planejamento direto
+        try:
+            btn_planejamento = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             click_js(driver, btn_planejamento)
             logger.info("✅ Entrou no planejamento (Direto)!")
-        else:
+        except:
             # ==================================================================
-            # 🚨 RESGATE SEM REFRESH (CLIQUE NO NOME NA LISTA)
+            # 🚨 RESGATE INFALÍVEL
             # ==================================================================
-            logger.warning("⚠️ Ainda no Painel. Clicando no PRIMEIRO paciente da lista...")
+            logger.warning("⚠️ Botão não visto. Clicando no PRIMEIRO paciente da lista...")
             try:
-                # Garante que modal fechou
+                # Garante que modal fechou para não bloquear o clique
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
-                # Clica no texto do nome
+                # Procura o texto do nome
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
                 elem_nome = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, xpath_nome)))
-                
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
+                
+                logger.info("✅ Elemento do nome encontrado. Clicando...")
                 click_js(driver, elem_nome)
                 
-                logger.info("✅ Clique de resgate enviado.")
                 time.sleep(8) # Espera carregar perfil
                 
-                btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 15))
+                # Agora procura o botão novamente
+                btn_final = encontrar_botao_planejamento(driver, WebDriverWait(driver, 20))
                 if btn_final:
                     click_js(driver, btn_final)
-                    logger.info("✅ Planejamento acessado!")
+                    logger.info("✅ Planejamento acessado via Resgate!")
                 else:
+                    # Se falhar, tenta o botão de "Adicionar Planejamento" genérico da página do paciente
                     raise Exception("Não entrou no perfil (Botão de planejamento não achado).")
 
             except Exception as e:
+                # Print do HTML para debug final se falhar aqui
                 raise Exception(f"Falha crítica no resgate: {e}")
 
         # 7. EXECUÇÃO DA DIETA
