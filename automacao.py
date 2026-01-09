@@ -10,6 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 import time
 import requests
+from datetime import datetime # <--- Importante para data
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
 # ==============================================================================
-# 🛠️ AUXILIARES (ESSENCIAIS)
+# 🛠️ AUXILIARES
 # ==============================================================================
 def matar_zumbis():
     try:
@@ -37,7 +38,6 @@ def ler_credenciais():
     senha = os.getenv("SENHA_WEBDIET")
     return (email, senha) if email else (None, None)
 
-# O SEGREDO DO SUCESSO DO SEU CÓDIGO ANTIGO: CLIQUE VIA JS
 def click_js(driver, elemento):
     try:
         driver.execute_script("arguments[0].click();", elemento)
@@ -50,11 +50,23 @@ def digitar_humano(driver, id_elemento, texto):
         elem = driver.find_element(By.ID, id_elemento)
         elem.click()
         elem.clear()
-        for char in texto:
+        texto_str = str(texto)
+        for char in texto_str:
             elem.send_keys(char)
             time.sleep(0.01)
         elem.send_keys(Keys.TAB)
     except: pass
+
+def formatar_data_para_input(data_iso):
+    """Converte YYYY-MM-DD para DDMMYYYY (apenas números para máscara)"""
+    try:
+        # Pega 2025-04-10 e vira objeto data
+        data_obj = datetime.strptime(data_iso, "%Y-%m-%d")
+        # Retorna 10042025 (O site vai colocar as barras automaticamente)
+        return data_obj.strftime("%d%m%Y")
+    except Exception as e:
+        logger.warning(f"Erro ao converter data: {e}. Usando original.")
+        return data_iso.replace("-", "").replace("/", "") # Tenta limpar na força bruta
 
 def enviar_webhook(msg, status, link=None):
     if not WEBHOOK_MAKE_URL: return
@@ -77,16 +89,12 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         try:
             xpath = f"//span[contains(text(), '{nome}')]"
             elem = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, xpath)))
-            
-            # Garante que o elemento está visível para o JS pegar
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
             
-            # Clica no PAI (Card) como no seu código antigo, que é mais seguro
             parent = elem.find_element(By.XPATH, "./ancestor::div[contains(@class, 'itemLista')]")
             click_js(driver, parent)
             time.sleep(0.5)
             
-            # Confirmação
             try:
                 btn_ok = driver.find_element(By.CSS_SELECTOR, "div[onclick*='swal.clickConfirm']")
                 click_js(driver, btn_ok)
@@ -96,11 +104,11 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ V39 - A VOLTA DO JS (HÍBRIDO ROBUSTO)
+# 🤖 ROBÔ V41 - CORREÇÃO DE DATAS
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    matar_zumbis() # Mantive isso pq o Render precisa!
-    logger.info("--- ⚡ Iniciando Robô V39 (Lógica Antiga + JS Click) ---")
+    matar_zumbis()
+    logger.info("--- ⚡ Iniciando Robô V41 (Data Formatada) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -124,7 +132,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         try:
             WebDriverWait(driver, 30).until(EC.url_contains("painel"))
             btn = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
-            click_js(driver, btn) # JS Click
+            click_js(driver, btn)
         except:
             raise Exception("Falha ao abrir modal.")
         
@@ -133,15 +141,21 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # 3. PREENCHIMENTO
         logger.info(f">> Preenchendo: {paciente['nome']}")
         digitar_humano(driver, "nomeAtalho", paciente['nome'])
+        
         try: driver.find_element(By.ID, "generoAtalho").send_keys("M" if paciente['sexo'].lower().startswith('m') else "F")
         except: pass
-        digitar_humano(driver, "nascimentoAtalho", "01011990")
-        digitar_humano(driver, "telefoneAtalho", "11999999999")
+        
+        # --- CORREÇÃO DE DATA ---
+        # Converte 2025-04-10 para 10042025 antes de digitar
+        data_formatada = formatar_data_para_input(paciente['nascimento'])
+        logger.info(f"   > Data convertida: {paciente['nascimento']} -> {data_formatada}")
+        digitar_humano(driver, "nascimentoAtalho", data_formatada)
+        
+        digitar_humano(driver, "telefoneAtalho", paciente['telefone'])
         digitar_humano(driver, "emailAtalho", paciente['email'])
 
         # 4. SALVAR
         logger.info(">> Salvando...")
-        # JS Click direto, sem esperar visibilidade (como no seu código antigo)
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
         
@@ -151,58 +165,48 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except:
             raise Exception("Botão salvar travou.")
 
-        # 5. TRANSIÇÃO (REGISTRAR NOVA CONSULTA)
+        # 5. TRANSIÇÃO
         logger.info(">> Aguardando Modal 'Registrar Nova Consulta'...")
         time.sleep(3)
         try:
-            # Procura pelo texto, mas clica com JS
             xpath_modal = "//div[contains(text(), 'registrar nova consulta')]"
             btn_modal = driver.find_element(By.XPATH, xpath_modal)
             click_js(driver, btn_modal)
             logger.info("✅ Modal clicado (JS).")
         except:
-            logger.warning("⚠️ Botão não achado via XPath. Tentando swal.clickConfirm()...")
+            logger.warning("⚠️ Botão não achado. Tentando swal.clickConfirm()...")
             driver.execute_script("swal.clickConfirm()")
 
-        # 6. CARREGAMENTO DO PERFIL
-        logger.info(">> Aguardando carga do Perfil...")
-        time.sleep(5) # O código antigo confiava no sleep, vamos confiar também
+        # 6. PERFIL
+        logger.info(">> Aguardando Perfil...")
+        time.sleep(5)
         
-        # 7. PLANEJAMENTO (A PARTE QUE DEU ERRO - VOLTANDO AO ANTIGO)
-        logger.info(">> Iniciando Planejamento (Modo Antigo)...")
+        # 7. PLANEJAMENTO
+        logger.info(">> Iniciando Planejamento...")
         driver.execute_script("document.body.style.zoom='70%'")
         
         try:
-            # 1. Acha o botão (mesmo que escondido)
             btn_add = wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-            
-            # 2. CLIQUE JS FORÇADO (Ignora overlays)
             click_js(driver, btn_add)
-            logger.info(">> Clicado no Planejamento (JS).")
+            time.sleep(3)
             
-            time.sleep(3) # Espera fixa do código antigo
-            
-            # 3. AVANÇAR (Procura o botão de confirmação do SweetAlert)
-            logger.info(">> Tentando Avançar...")
+            # Avançar
             try:
-                # Tenta o botão físico primeiro
                 btn_avancar = driver.find_element(By.XPATH, "//div[contains(text(), 'avançar')]")
                 click_js(driver, btn_avancar)
             except:
-                # Se falhar, usa o genérico do modal
                 driver.execute_script("swal.clickConfirm()")
             
             time.sleep(2)
             
-            # 4. CRIAR (CONFIRMAR)
-            logger.info(">> Tentando Criar...")
+            # Criar
             btn_criar = driver.find_element(By.ID, "criarPlanejamento")
             click_js(driver, btn_criar)
             
         except Exception as e:
             raise Exception(f"Erro no fluxo de planejamento: {e}")
 
-        # 8. RESTO DO FLUXO (HÁBITOS, FAVORITOS, ETC)
+        # 8. DIETA E HÁBITOS
         time.sleep(4)
         
         # Link
@@ -212,7 +216,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info(f"✅ LINK: {link_app}")
         except: pass
 
-        # Limpeza
         logger.info(">> Limpando hábitos...")
         try:
             for _ in range(12):
@@ -223,7 +226,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 time.sleep(0.5)
         except: pass
 
-        # Favoritos
         logger.info(">> Favoritos...")
         driver.execute_script("window.scrollTo(0, 0);")
         try:
@@ -272,6 +274,7 @@ class DadosPaciente(BaseModel):
     sexo: str
     email: str
     telefone: str
+    nascimento: str
 
 class PedidoCadastro(BaseModel):
     paciente: DadosPaciente
