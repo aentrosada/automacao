@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -32,7 +32,9 @@ def ler_credenciais():
     return email, senha
 
 def click_js(driver, elemento):
-    driver.execute_script("arguments[0].click();", elemento)
+    try:
+        driver.execute_script("arguments[0].click();", elemento)
+    except: pass
 
 def digitar_humano(driver, id_elemento, texto):
     """Clica, limpa e digita caractere por caractere para ativar máscaras"""
@@ -40,27 +42,21 @@ def digitar_humano(driver, id_elemento, texto):
         elem = driver.find_element(By.ID, id_elemento)
         elem.click()
         elem.clear()
-        # Digita devagar para a máscara pegar
         for char in texto:
             elem.send_keys(char)
-            time.sleep(0.05) # Pequeno delay humano
-        elem.send_keys(Keys.TAB) # Sai do campo para validar
+            time.sleep(0.05) 
+        elem.send_keys(Keys.TAB)
     except Exception as e:
         logger.error(f"Erro ao digitar em {id_elemento}: {e}")
 
 def verificar_erro_formulario(driver):
-    """Verifica se apareceu o erro específico que você mandou"""
     try:
-        # Procura a div de erro
         div_erro = driver.find_element(By.ID, "erroPacienteAtalho")
-        
-        # Se ela estiver visível e tiver texto, é falha
         if div_erro.is_displayed() and div_erro.text.strip():
             msg = div_erro.text.strip()
             logger.error(f"❌ O SITE RECUSOU O CADASTRO: '{msg}'")
             return msg
-    except NoSuchElementException:
-        pass # Se não achar a div, ótimo
+    except: pass
     return None
 
 def enviar_webhook(msg, status, link=None):
@@ -91,10 +87,10 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V20 - DIGITAÇÃO HUMANA)
+# 🤖 ROBÔ PRINCIPAL (V21 - ANTI-STALE)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    logger.info("--- ⚡ Iniciando Robô V20 (Correção de Validação) ---")
+    logger.info("--- ⚡ Iniciando Robô V21 (Correção Stale Element) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -115,79 +111,68 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # 2. ABRIR NOVO PACIENTE
         logger.info(">> Abrindo formulário...")
         try:
-            WebDriverWait(driver, 20).until(EC.url_contains("painel"))
+            WebDriverWait(driver, 30).until(EC.url_contains("painel"))
             btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
             click_js(driver, btn)
         except:
             raise Exception("Falha ao abrir modal de cadastro.")
         
-        time.sleep(2) # Espera modal abrir
+        time.sleep(2)
 
-        # 3. PREENCHIMENTO HUMANO (DIGITAÇÃO)
+        # 3. PREENCHIMENTO HUMANO
         logger.info(f">> Digitando dados de: {paciente['nome']}")
-        
-        # Nome
         digitar_humano(driver, "nomeAtalho", paciente['nome'])
         
-        # Gênero (Select é chato, usa send_keys para selecionar pela primeira letra)
         try:
             sexo_letra = "M" if paciente['sexo'].lower().startswith('m') else "F"
-            sel_sexo = driver.find_element(By.ID, "generoAtalho")
-            sel_sexo.send_keys(sexo_letra)
+            driver.find_element(By.ID, "generoAtalho").send_keys(sexo_letra)
         except: pass
 
-        # Data de Nascimento (O PONTO CRÍTICO)
-        # Digita apenas os números, a máscara do site deve colocar as barras
-        # Se nascer em 01/01/1990, digita 01011990
         logger.info(">> Digitando Data de Nascimento...")
         digitar_humano(driver, "nascimentoAtalho", "01011990")
-        
-        # Telefone (Apenas números)
         digitar_humano(driver, "telefoneAtalho", "11999999999")
-        
-        # Email
         digitar_humano(driver, "emailAtalho", paciente['email'])
 
-        # 4. TENTATIVA DE SALVAR COM VERIFICAÇÃO DE ERRO
+        # 4. TENTATIVA DE SALVAR COM PROTEÇÃO STALE
         logger.info(">> Clicando em CADASTRAR...")
+        
+        # Pega o botão fresco antes de clicar
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
         
-        time.sleep(2) # Tempo para o site validar
-
-        # --- VERIFICAÇÃO DE ERRO ---
-        msg_erro = verificar_erro_formulario(driver)
-        if msg_erro:
-            # Se achou erro, tenta corrigir ou aborta
-            raise Exception(f"Erro no formulário detectado: {msg_erro}")
-
-        # Se o botão de salvar ainda estiver lá e visível, algo deu errado
-        if btn_salvar.is_displayed():
-            # Tenta verificar erro de novo
+        # --- AQUI ESTÁ A CORREÇÃO V21 ---
+        logger.info(">> Validando envio...")
+        try:
+            # Espera o botão sumir. Se der Stale, significa que sumiu também (Sucesso)
+            WebDriverWait(driver, 5).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
+            logger.info("✅ Botão sumiu/mudou (Sucesso).")
+        except StaleElementReferenceException:
+            logger.info("✅ Botão ficou obsoleto (Isso é SUCESSO, a página mudou).")
+        except TimeoutException:
+            # Se deu timeout, o botão ainda está lá intacto. Erro de formulário?
             msg_erro = verificar_erro_formulario(driver)
-            if msg_erro: raise Exception(f"Erro: {msg_erro}")
-            # Se não tem msg de erro mas o botão continua, pode ser timeout
-            logger.warning("⚠️ Botão de salvar continua na tela, mas sem mensagem de erro visível. Continuando...")
+            if msg_erro: 
+                raise Exception(f"Erro no formulário: {msg_erro}")
+            else:
+                logger.warning("⚠️ Botão continua na tela sem erro visível. Tentando seguir...")
 
         # 5. TRANSIÇÃO (MODAL DE CONSULTA)
         logger.info(">> Aguardando Modal de Consulta (3s)...")
         time.sleep(3)
         
         try:
-            # Procura e clica no botão do modal
             xpath_modal = "//div[contains(text(), 'registrar nova consulta')]"
             btn_modal = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xpath_modal)))
             click_js(driver, btn_modal)
             logger.info("✅ Modal confirmado!")
         except:
-            # Se falhar, tenta JS direto
             logger.warning("⚠️ Modal não clicado (tentando JS ou seguindo)...")
             driver.execute_script("swal.clickConfirm()")
 
         # 6. ENTRAR NO PLANEJAMENTO (COM RESGATE)
         logger.info(">> Buscando Planejamento...")
         time.sleep(3)
-        driver.execute_script("document.body.style.zoom='70%'") # Zoom out para ver tudo
+        driver.execute_script("document.body.style.zoom='70%'")
 
         try:
             btn_add = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
@@ -195,7 +180,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info("✅ Entrou no planejamento!")
         except:
             logger.warning("⚠️ Iniciando RESGATE pelo nome...")
-            # Resgate
             try:
                 try: driver.execute_script("swal.close()")
                 except: pass
@@ -221,7 +205,6 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info(f"✅ Link: {link_app}")
         except: pass
 
-        # Confirmações iniciais
         try:
             click_js(driver, WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'avançar')]"))))
             time.sleep(1)
@@ -267,10 +250,9 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 
     except Exception as e:
         logger.error(f"❌ ERRO: {e}")
-        # Verifica erro de formulário uma última vez
         try:
-            erro_final = verificar_erro_formulario(driver)
-            if erro_final: logger.error(f"ERRO VISÍVEL NA TELA: {erro_final}")
+            msg_erro = verificar_erro_formulario(driver)
+            if msg_erro: logger.error(f"ERRO VISÍVEL: {msg_erro}")
         except: pass
         
         enviar_webhook(paciente, dados_clinicos, link_app, "Erro", str(e))
