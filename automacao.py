@@ -8,7 +8,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 import time
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -32,7 +32,7 @@ def matar_zumbis():
         logger.info("🧹 Faxina: Matando processos órfãos do Chrome...")
         subprocess.run(['pkill', '-f', 'chrome'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['pkill', '-f', 'chromedriver'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(3) # Dá tempo para o sistema limpar a RAM
+        time.sleep(2) # Dá tempo para o sistema limpar a RAM
     except: pass
 
 def ler_credenciais():
@@ -55,7 +55,7 @@ def digitar_humano(driver, id_elemento, texto):
         elem.clear()
         for char in texto:
             elem.send_keys(char)
-            time.sleep(0.02)
+            time.sleep(0.02) # Mais rápido para economizar tempo
         elem.send_keys(Keys.TAB)
     except Exception as e:
         logger.error(f"Erro ao digitar em {id_elemento}: {e}")
@@ -109,41 +109,31 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ PRINCIPAL (V30 - RESILIENTE A FALHAS DE BOOT)
+# 🤖 ROBÔ PRINCIPAL (V29 - O EXTERMINADOR DE ZUMBIS)
 # ==============================================================================
-def iniciar_driver():
-    """Tenta iniciar o Chrome com retry"""
+def executar_cadastro(usuario, senha, paciente, dados_clinicos):
+    # 1. LIMPEZA DE MEMÓRIA (CRÍTICO)
+    matar_zumbis()
+    
+    logger.info("--- ⚡ Iniciando Robô V29 (Gerenciamento de Memória) ---")
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-    chrome_options.add_argument("--window-size=1280,720")
-    chrome_options.page_load_strategy = 'eager'
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false") # Sem imagens
+    chrome_options.add_argument("--window-size=1280,720") # Resolução menor gasta menos RAM
+    chrome_options.page_load_strategy = 'eager' # Não espera carregar tudo
     
-    for tentativa in range(3):
-        try:
-            driver = webdriver.Chrome(options=chrome_options)
-            driver.set_page_load_timeout(60)
-            return driver
-        except WebDriverException as e:
-            logger.warning(f"⚠️ Falha ao iniciar Chrome (Tentativa {tentativa+1}/3). Limpando e tentando de novo...")
-            matar_zumbis()
-            time.sleep(5)
-    raise Exception("Não foi possível iniciar o Chrome após 3 tentativas. Servidor sobrecarregado.")
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.set_page_load_timeout(60) # Se travar 60s, mata.
+    
+    wait = WebDriverWait(driver, 20)
+    link_app = "Não gerado"
 
-def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    matar_zumbis()
-    
-    logger.info("--- ⚡ Iniciando Robô V30 (Retry de Boot) ---")
-    
     try:
-        driver = iniciar_driver()
-        wait = WebDriverWait(driver, 20)
-        link_app = "Não gerado"
-
         # 1. LOGIN
         driver.get("https://pt.webdiet.com.br/login/")
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
@@ -200,6 +190,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         time.sleep(10)
         driver.execute_script("document.body.style.zoom='70%'")
 
+        # Tenta achar direto
         btn_planejamento = encontrar_botao_planejamento(driver, WebDriverWait(driver, 5))
         
         if btn_planejamento:
@@ -211,12 +202,15 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
                 try: driver.execute_script("swal.close()")
                 except: pass
                 
+                # Procura o texto do nome e clica no PAI (Card)
                 xpath_nome = f"//*[contains(text(), '{paciente['nome']}')]"
                 elem_nome = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.XPATH, xpath_nome)))
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_nome)
                 
-                try: elem_nome.find_element(By.XPATH, "./..").click() 
-                except: click_js(driver, elem_nome)
+                try:
+                    elem_nome.find_element(By.XPATH, "./..").click() # Clica no pai
+                except:
+                    click_js(driver, elem_nome) # Clica no texto
                 
                 logger.info("✅ Clique de resgate enviado.")
                 time.sleep(8)
@@ -309,9 +303,10 @@ class PedidoCadastro(BaseModel):
 
 @app.post("/cadastrar-paciente")
 def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
+    # Se receber muitas requisições, rejeita se o sistema estiver ocupado
     if os.system("pgrep chrome > /dev/null") == 0:
-        logger.warning("⚠️ Sistema ocupado! Tentando limpar...")
-        matar_zumbis()
+        logger.warning("⚠️ Sistema ocupado! Tentando matar processos antigos...")
+        matar_zumbis() # Tenta limpar para aceitar a nova, mas é arriscado
     
     usuario, senha = ler_credenciais()
     background_tasks.add_task(executar_cadastro, usuario, senha, pedido.paciente.dict(), pedido.dados_clinicos)
