@@ -13,6 +13,7 @@ import requests
 from datetime import datetime
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
+from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
@@ -69,28 +70,27 @@ def enviar_webhook(msg, status, paciente_nome=None):
             "status": status, 
             "paciente": paciente_nome,
             "etapa": "cadastro_apenas"
-        }, timeout=3)
+        }, timeout=5)
     except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ CADASTRO EXPRESS V2 (COM TOLERÂNCIA A LENTIDÃO)
+# 🤖 ROBÔ DE CADASTRO (FOCADO E RÁPIDO)
 # ==============================================================================
-def executar_cadastro_express(usuario, senha, paciente):
+def executar_cadastro_apenas(usuario, senha, paciente):
     matar_zumbis()
-    logger.info("--- ⚡ Robô de Cadastro Express V2 Iniciado ---")
+    logger.info("--- ⚡ Robô de Cadastro Iniciado ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-    chrome_options.page_load_strategy = 'eager'
     chrome_options.add_argument("--window-size=1280,720")
+    # Otimização: Não carregar imagens para ser mais rápido
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
     
     driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(90) # Aumentei um pouco o timeout geral
+    driver.set_page_load_timeout(60)
     wait = WebDriverWait(driver, 20)
 
     try:
@@ -99,12 +99,10 @@ def executar_cadastro_express(usuario, senha, paciente):
         wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
         driver.find_element(By.ID, "senhaLogin").send_keys(senha + Keys.ENTER)
         
-        # 2. ABRIR MODAL
+        # 2. ABRIR FORMULÁRIO
         logger.info(">> Abrindo formulário...")
         try:
-            try: driver.execute_script("if (typeof jQuery !== 'undefined') { jQuery.fx.off = true; }")
-            except: pass
-
+            # Espera o painel carregar e clica no botão verde
             btn = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
             click_js(driver, btn)
         except:
@@ -113,11 +111,10 @@ def executar_cadastro_express(usuario, senha, paciente):
         time.sleep(1.5)
 
         # 3. PREENCHIMENTO
-        logger.info(f">> Cadastrando: {paciente['nome']}")
+        logger.info(f">> Preenchendo dados de: {paciente['nome']}")
         digitar_humano(driver, "nomeAtalho", paciente['nome'])
         
-        try: 
-            driver.find_element(By.ID, "generoAtalho").send_keys("M" if paciente['sexo'].lower().startswith('m') else "F")
+        try: driver.find_element(By.ID, "generoAtalho").send_keys("M" if paciente['sexo'].lower().startswith('m') else "F")
         except: pass
         
         data_fmt = formatar_data_para_input(paciente['nascimento'])
@@ -125,39 +122,34 @@ def executar_cadastro_express(usuario, senha, paciente):
         digitar_humano(driver, "telefoneAtalho", paciente['telefone'])
         digitar_humano(driver, "emailAtalho", paciente['email'])
 
-        # 4. SALVAR (COM DUPLA VERIFICAÇÃO)
+        # 4. SALVAR E VALIDAR
         logger.info(">> Salvando...")
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
         
-        # Verifica se precisa clicar de novo (Double Tap)
+        # Validação Robusta: Espera o botão sumir (Sucesso) ou Toast de Erro
+        try:
+            # Dá 30 segundos para salvar (servidor pode estar lento)
+            WebDriverWait(driver, 30).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
+            logger.info("✅ CADASTRO REALIZADO COM SUCESSO.")
+        except TimeoutException:
+            # Se der timeout, verifica se tem mensagem de erro na tela (ex: email já existe)
+            try:
+                msg_erro = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
+                raise Exception(f"Site recusou o cadastro: {msg_erro}")
+            except:
+                raise Exception("Tempo limite esgotado ao salvar (Botão não sumiu).")
+
+        # 5. LIMPEZA FINAL (Fechar modal 'Nova Consulta' se aparecer)
+        # Isso garante que o próximo robô encontre a tela limpa
         time.sleep(2)
         try:
-            if btn_salvar.is_displayed():
-                logger.info("   > Botão ainda visível, clicando novamente...")
-                click_js(driver, btn_salvar)
-        except: pass # Se sumiu, ótimo
-
-        try:
-            # Aumentei para 30s de paciência
-            WebDriverWait(driver, 30).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
-            logger.info("✅ PACIENTE SALVO COM SUCESSO.")
-        except TimeoutException:
-            # Se deu timeout, verifica se tem msg de erro na tela
-            try:
-                erro = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
-                raise Exception(f"Site recusou: {erro}")
-            except:
-                # Se não tem mensagem de erro, assume lentidão extrema
-                raise Exception("Erro ao salvar: O site demorou demais ou travou.")
-
-        # 5. LIMPEZA FINAL
-        time.sleep(1)
-        try:
+            # Tenta clicar no botão de fechar ou "não registrar" se existir
             driver.execute_script("if(typeof swal !== 'undefined') { swal.close(); }")
+            logger.info(">> Modal de transição fechado.")
         except: pass
 
-        enviar_webhook("Cadastro Realizado", "Sucesso", paciente['nome'])
+        enviar_webhook("Cadastro Concluído", "Sucesso", paciente['nome'])
         return {"status": "sucesso", "paciente": paciente['nome']}
 
     except Exception as e:
@@ -169,7 +161,7 @@ def executar_cadastro_express(usuario, senha, paciente):
         except: pass
 
 # ==============================================================================
-# API SIMPLIFICADA
+# API DE CADASTRO
 # ==============================================================================
 app = FastAPI()
 
@@ -182,6 +174,8 @@ class DadosPaciente(BaseModel):
 
 class PedidoCadastro(BaseModel):
     paciente: DadosPaciente
+    # Mantemos opcional para não quebrar quem manda o JSON completo
+    dados_clinicos: Optional[Dict[str, Any]] = {} 
 
 @app.post("/cadastrar-paciente")
 def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
@@ -191,8 +185,8 @@ def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
     if not usuario or not senha:
         return {"status": "erro", "msg": "Credenciais não configuradas"}
 
-    background_tasks.add_task(executar_cadastro_express, usuario, senha, pedido.paciente.dict())
-    return {"mensagem": "Processando cadastro...", "paciente": pedido.paciente.nome}
+    background_tasks.add_task(executar_cadastro_apenas, usuario, senha, pedido.paciente.dict())
+    return {"mensagem": "Iniciando cadastro...", "paciente": pedido.paciente.nome}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
