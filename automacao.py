@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 📝 LOGS
+# 📝 LOGS & CONFIG
 # ==============================================================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -96,11 +96,11 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ V43 - ABERTURA FORÇADA VIA FUNÇÃO NATIVA
+# 🤖 ROBÔ V45 - NAVEGAÇÃO POR ELEMENTOS (SEM URL)
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     matar_zumbis()
-    logger.info("--- ⚡ Iniciando Robô V43 (Execução Direta JS) ---")
+    logger.info("--- ⚡ Iniciando Robô V45 (Ignorando URL) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -109,7 +109,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     chrome_options.add_argument("--window-size=1280,720")
     
     driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(90)
+    driver.set_page_load_timeout(120)
     wait = WebDriverWait(driver, 20)
     link_app = "Não capturado"
 
@@ -122,7 +122,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         # 2. CADASTRO
         logger.info(">> Abrindo formulário...")
         try:
-            WebDriverWait(driver, 30).until(EC.url_contains("painel"))
+            # Espera botão "Novo Paciente" aparecer (não checa URL)
             btn = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
             click_js(driver, btn)
         except:
@@ -147,20 +147,28 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         click_js(driver, btn_salvar)
         
         try:
+            # Espera o botão salvar sumir (indicativo de sucesso)
             WebDriverWait(driver, 10).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
             logger.info("✅ Cadastro Salvo.")
         except:
             raise Exception("Botão salvar travou.")
 
-        # 5. BUSCA E ABERTURA (O PULO DO GATO)
-        logger.info(">> Iniciando Busca...")
+        # 5. MODAL "NOVA CONSULTA" (Gatilho Imediato)
+        # O robô deve confirmar esse modal para limpar a tela, mesmo que vá usar a busca depois
         time.sleep(2)
+        logger.info(">> Confirmando modal 'Nova Consulta' (Limpeza)...")
+        # Executa o comando que você mandou: onclick="swal.clickConfirm()"
+        driver.execute_script("if(typeof swal !== 'undefined') { swal.clickConfirm(); }")
+        time.sleep(2)
+
+        # 6. BUSCA POR TELEFONE
+        logger.info(">> Iniciando Busca (Estratégia Segura)...")
         
         try:
-            # Garante limpeza
+            # Garante que não tem nenhum modal na frente
             driver.execute_script("swal.close(); $('.modal').modal('hide');")
+            time.sleep(1)
             
-            # Busca
             search_input = wait.until(EC.element_to_be_clickable((By.ID, "barraBuscaPaciente")))
             search_input.clear()
             logger.info(f"   > Buscando: {paciente['telefone']}")
@@ -168,51 +176,51 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             time.sleep(1)
             search_input.send_keys(Keys.ENTER)
             
-            # Espera resultado aparecer
-            logger.info("   > Aguardando resultado na tela...")
-            wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".pacienteLinha")))
+            # Espera resultado
+            logger.info("   > Aguardando resultado...")
+            # Pega a linha do paciente
+            linha_paciente = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".pacienteLinha")))
             
-            # --- A MUDANÇA CRUCIAL AQUI ---
-            logger.info("✅ Resultado visto. Executando abrirPaciente(0)...")
-            # Em vez de clicar, executamos a função do site diretamente
-            driver.execute_script("abrirPaciente(0)")
+            logger.info("   > Clicando no paciente (JS)...")
+            click_js(driver, linha_paciente)
             
-            # Aguarda carregar o perfil
-            logger.info("   > Aguardando perfil carregar...")
+            # --- AQUI ESTA A MUDANÇA CRUCIAL ---
+            # Não esperamos a URL mudar. Esperamos o botão do PLANEJAMENTO aparecer.
+            logger.info("   > Aguardando botão 'atalhoPlanejamento' aparecer...")
             wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-            logger.info("✅ Perfil carregado com sucesso.")
+            logger.info("✅ Perfil carregado (Botão detectado).")
 
         except Exception as e:
-            raise Exception(f"Falha na etapa de busca/abertura: {e}")
+            raise Exception(f"Falha ao entrar no perfil via busca: {e}")
 
-        # 6. PLANEJAMENTO
+        # 7. PLANEJAMENTO (SEQUENCIA SWAL)
         logger.info(">> Iniciando Fluxo de Dieta...")
         driver.execute_script("document.body.style.zoom='70%'")
-        time.sleep(1)
+        time.sleep(2)
         
         try:
             # 1. Clicar no atalho
             btn_add = driver.find_element(By.ID, "atalhoPlanejamento")
             click_js(driver, btn_add)
             logger.info("   > Clicado em 'Adicionar Planejamento'")
-            time.sleep(2)
+            time.sleep(3)
             
             # 2. Confirmar (Avançar)
-            logger.info("   > Avançar (1)...")
+            logger.info("   > Avançar (swal.clickConfirm)...")
             driver.execute_script("swal.clickConfirm()")
-            time.sleep(2)
+            time.sleep(3)
             
             # 3. Confirmar (Criar)
-            logger.info("   > Criar (2)...")
+            logger.info("   > Criar (swal.clickConfirm)...")
             driver.execute_script("swal.clickConfirm()")
             
-            # Aguarda tela de edição
+            # Aguarda carregamento
             time.sleep(5)
             
         except Exception as e:
             raise Exception(f"Erro na abertura da dieta: {e}")
 
-        # 7. CAPTURA LINK
+        # 8. CAPTURA LINK
         try:
             link_elem = driver.find_element(By.XPATH, "//*[contains(text(), 'paciente.me/')]")
             link_app = link_elem.text.strip()
