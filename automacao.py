@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 import uvicorn
 
 # ==============================================================================
-# 📝 CONFIGURAÇÃO DE LOGS
+# 📝 LOGS
 # ==============================================================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -27,7 +27,6 @@ WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 # 🛠️ AUXILIARES
 # ==============================================================================
 def matar_zumbis():
-    """Limpa memória antes de iniciar"""
     try:
         subprocess.run(['pkill', '-f', 'chrome'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['pkill', '-f', 'chromedriver'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -40,7 +39,6 @@ def ler_credenciais():
     return (email, senha) if email else (None, None)
 
 def click_js(driver, elemento):
-    """Clique via JS para ignorar overlays"""
     try:
         driver.execute_script("arguments[0].click();", elemento)
     except:
@@ -93,17 +91,16 @@ def selecionar_itens(driver, wait, categoria, codigos_brutos):
             click_js(driver, parent)
             time.sleep(0.5)
             
-            # Confirmação genérica
             driver.execute_script("swal.clickConfirm()")
             time.sleep(0.5)
         except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ V42 - ESTRATÉGIA DE BUSCA POR TELEFONE
+# 🤖 ROBÔ V43 - ABERTURA FORÇADA VIA FUNÇÃO NATIVA
 # ==============================================================================
 def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     matar_zumbis()
-    logger.info("--- ⚡ Iniciando Robô V42 (Busca por Telefone) ---")
+    logger.info("--- ⚡ Iniciando Robô V43 (Execução Direta JS) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -155,39 +152,38 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except:
             raise Exception("Botão salvar travou.")
 
-        # 5. BUSCA POR TELEFONE (A NOVA ESTRATÉGIA)
-        logger.info(">> Iniciando Busca pelo Telefone...")
+        # 5. BUSCA E ABERTURA (O PULO DO GATO)
+        logger.info(">> Iniciando Busca...")
         time.sleep(2)
         
         try:
-            # Fecha qualquer modal que tenha sobrado (Success/Nova Consulta) para liberar a busca
+            # Garante limpeza
             driver.execute_script("swal.close(); $('.modal').modal('hide');")
-            time.sleep(1)
             
-            # Localiza a barra de busca
+            # Busca
             search_input = wait.until(EC.element_to_be_clickable((By.ID, "barraBuscaPaciente")))
             search_input.clear()
-            
-            # Digita o telefone e dá Enter
             logger.info(f"   > Buscando: {paciente['telefone']}")
             search_input.send_keys(paciente['telefone'])
             time.sleep(1)
             search_input.send_keys(Keys.ENTER)
             
-            # Espera o resultado aparecer (.pacienteLinha)
-            logger.info("   > Aguardando resultado...")
-            card_paciente = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".pacienteLinha")))
+            # Espera resultado aparecer
+            logger.info("   > Aguardando resultado na tela...")
+            wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".pacienteLinha")))
             
-            # Clica no paciente
-            logger.info("✅ Paciente encontrado! Abrindo perfil...")
-            click_js(driver, card_paciente)
+            # --- A MUDANÇA CRUCIAL AQUI ---
+            logger.info("✅ Resultado visto. Executando abrirPaciente(0)...")
+            # Em vez de clicar, executamos a função do site diretamente
+            driver.execute_script("abrirPaciente(0)")
             
-            # Aguarda carregar o perfil (confirma pelo botão de planejamento)
+            # Aguarda carregar o perfil
+            logger.info("   > Aguardando perfil carregar...")
             wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
             logger.info("✅ Perfil carregado com sucesso.")
 
         except Exception as e:
-            raise Exception(f"Falha na etapa de busca do paciente: {e}")
+            raise Exception(f"Falha na etapa de busca/abertura: {e}")
 
         # 6. PLANEJAMENTO
         logger.info(">> Iniciando Fluxo de Dieta...")
@@ -201,22 +197,22 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
             logger.info("   > Clicado em 'Adicionar Planejamento'")
             time.sleep(2)
             
-            # 2. Primeiro Avançar (swal)
-            logger.info("   > Confirmando 'Avançar' (1)...")
+            # 2. Confirmar (Avançar)
+            logger.info("   > Avançar (1)...")
             driver.execute_script("swal.clickConfirm()")
             time.sleep(2)
             
-            # 3. Segundo Avançar/Confirmar (swal) - Conforme solicitado
-            logger.info("   > Confirmando 'Avançar/Criar' (2)...")
+            # 3. Confirmar (Criar)
+            logger.info("   > Criar (2)...")
             driver.execute_script("swal.clickConfirm()")
             
-            # Aguarda a tela de edição carregar
+            # Aguarda tela de edição
             time.sleep(5)
             
         except Exception as e:
             raise Exception(f"Erro na abertura da dieta: {e}")
 
-        # 7. CAPTURA DE LINK E EDIÇÃO
+        # 7. CAPTURA LINK
         try:
             link_elem = driver.find_element(By.XPATH, "//*[contains(text(), 'paciente.me/')]")
             link_app = link_elem.text.strip()
@@ -224,7 +220,7 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
         except: pass
 
         # Limpeza
-        logger.info(">> Limpando hábitos antigos...")
+        logger.info(">> Limpando hábitos...")
         try:
             for _ in range(12):
                 lixeira = WebDriverWait(driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "i.fi-sr-trash")))
