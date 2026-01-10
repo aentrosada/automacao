@@ -7,6 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import time
 import requests
 from datetime import datetime
@@ -49,7 +50,7 @@ def digitar_humano(driver, id_elemento, texto):
         elem.click()
         elem.clear()
         elem.send_keys(str(texto))
-        time.sleep(0.05) # Leve delay pro site processar
+        time.sleep(0.05)
         elem.send_keys(Keys.TAB)
     except: pass
 
@@ -72,11 +73,11 @@ def enviar_webhook(msg, status, paciente_nome=None):
     except: pass
 
 # ==============================================================================
-# 🤖 ROBÔ CADASTRO EXPRESS (OTIMIZADO)
+# 🤖 ROBÔ CADASTRO EXPRESS V2 (COM TOLERÂNCIA A LENTIDÃO)
 # ==============================================================================
 def executar_cadastro_express(usuario, senha, paciente):
     matar_zumbis()
-    logger.info("--- ⚡ Robô de Cadastro Express Iniciado ---")
+    logger.info("--- ⚡ Robô de Cadastro Express V2 Iniciado ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -84,14 +85,13 @@ def executar_cadastro_express(usuario, senha, paciente):
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-extensions")
-    # Otimização agressiva: Sem imagens e carregamento 'eager'
     chrome_options.add_argument("--blink-settings=imagesEnabled=false")
     chrome_options.page_load_strategy = 'eager'
     chrome_options.add_argument("--window-size=1280,720")
     
     driver = webdriver.Chrome(options=chrome_options)
-    driver.set_page_load_timeout(60) # Timeout curto pois é leve
-    wait = WebDriverWait(driver, 15)
+    driver.set_page_load_timeout(90) # Aumentei um pouco o timeout geral
+    wait = WebDriverWait(driver, 20)
 
     try:
         # 1. LOGIN
@@ -102,7 +102,6 @@ def executar_cadastro_express(usuario, senha, paciente):
         # 2. ABRIR MODAL
         logger.info(">> Abrindo formulário...")
         try:
-            # Desativa animações jQuery para ir mais rápido
             try: driver.execute_script("if (typeof jQuery !== 'undefined') { jQuery.fx.off = true; }")
             except: pass
 
@@ -111,7 +110,7 @@ def executar_cadastro_express(usuario, senha, paciente):
         except:
             raise Exception("Falha ao abrir modal de cadastro.")
         
-        time.sleep(1)
+        time.sleep(1.5)
 
         # 3. PREENCHIMENTO
         logger.info(f">> Cadastrando: {paciente['nome']}")
@@ -126,23 +125,35 @@ def executar_cadastro_express(usuario, senha, paciente):
         digitar_humano(driver, "telefoneAtalho", paciente['telefone'])
         digitar_humano(driver, "emailAtalho", paciente['email'])
 
-        # 4. SALVAR
+        # 4. SALVAR (COM DUPLA VERIFICAÇÃO)
         logger.info(">> Salvando...")
         btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
         click_js(driver, btn_salvar)
         
+        # Verifica se precisa clicar de novo (Double Tap)
+        time.sleep(2)
         try:
-            # O sucesso é confirmado quando o botão de salvar some
-            WebDriverWait(driver, 10).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
-            logger.info("✅ PACIENTE SALVO COM SUCESSO.")
-        except:
-            raise Exception("Erro ao salvar: O site não confirmou o cadastro.")
+            if btn_salvar.is_displayed():
+                logger.info("   > Botão ainda visível, clicando novamente...")
+                click_js(driver, btn_salvar)
+        except: pass # Se sumiu, ótimo
 
-        # 5. LIMPEZA FINAL (Opcional: Fechar modal de 'Nova Consulta' se aparecer)
-        # Isso deixa a conta pronta para o próximo robô não encontrar lixo na tela
+        try:
+            # Aumentei para 30s de paciência
+            WebDriverWait(driver, 30).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
+            logger.info("✅ PACIENTE SALVO COM SUCESSO.")
+        except TimeoutException:
+            # Se deu timeout, verifica se tem msg de erro na tela
+            try:
+                erro = driver.find_element(By.CSS_SELECTOR, ".toast-message").text
+                raise Exception(f"Site recusou: {erro}")
+            except:
+                # Se não tem mensagem de erro, assume lentidão extrema
+                raise Exception("Erro ao salvar: O site demorou demais ou travou.")
+
+        # 5. LIMPEZA FINAL
         time.sleep(1)
         try:
-            # Clica em 'não registrar' ou fecha o modal para sair limpo
             driver.execute_script("if(typeof swal !== 'undefined') { swal.close(); }")
         except: pass
 
@@ -171,7 +182,6 @@ class DadosPaciente(BaseModel):
 
 class PedidoCadastro(BaseModel):
     paciente: DadosPaciente
-    # Removi dados_clinicos pois esse robô não faz dieta
 
 @app.post("/cadastrar-paciente")
 def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
