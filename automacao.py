@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException, NoSuchElementException
 import time
 import requests
 from datetime import datetime
@@ -24,84 +24,107 @@ logger = logging.getLogger(__name__)
 WEBHOOK_MAKE_URL = os.getenv("WEBHOOK_MAKE_URL")
 
 # ==============================================================================
-# 🛠️ AUXILIARES
+# 🛠️ AUXILIARY FUNCTIONS
 # ==============================================================================
-def matar_zumbis():
+def kill_zombies():
     try:
         subprocess.run(['pkill', '-f', 'chrome'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['pkill', '-f', 'chromedriver'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
     except: pass
 
-def ler_credenciais():
+def read_credentials():
     email = os.getenv("LOGIN_WEBDIET")
-    senha = os.getenv("SENHA_WEBDIET")
-    return (email, senha) if email else (None, None)
+    password = os.getenv("SENHA_WEBDIET")
+    return (email, password) if email else (None, None)
 
-def click_js(driver, elemento):
+def click_js(driver, element):
     try:
-        driver.execute_script("arguments[0].click();", elemento)
+        driver.execute_script("arguments[0].click();", element)
     except:
-        try: elemento.click()
+        try: element.click()
         except: pass
 
-def digitar_humano(driver, id_elemento, texto):
+def human_typing(driver, element_id, text):
     try:
-        elem = driver.find_element(By.ID, id_elemento)
+        elem = driver.find_element(By.ID, element_id)
         elem.click()
         elem.clear()
-        texto_str = str(texto)
-        for char in texto_str:
+        text_str = str(text)
+        for char in text_str:
             elem.send_keys(char)
             time.sleep(0.01)
         elem.send_keys(Keys.TAB)
     except: pass
 
-def formatar_data_para_input(data_iso):
+def format_date_for_input(iso_date):
     try:
-        data_obj = datetime.strptime(data_iso, "%Y-%m-%d")
-        return data_obj.strftime("%d%m%Y")
+        date_obj = datetime.strptime(iso_date, "%Y-%m-%d")
+        return date_obj.strftime("%d%m%Y")
     except:
-        return data_iso.replace("-", "").replace("/", "")
+        return iso_date.replace("-", "").replace("/", "")
 
-def enviar_webhook(msg, status, link=None):
+def send_webhook(msg, status, link=None):
     if not WEBHOOK_MAKE_URL: return
     try: requests.post(WEBHOOK_MAKE_URL, json={"msg": msg, "status": status, "link": link}, timeout=5)
     except: pass
 
-# --- MAPA DE REFEIÇÕES ---
-MAPA_REFEICOES = {
+# --- MEAL MAP ---
+MEAL_MAP = {
     "cafe": {"op1": "PENDENTE", "op2": "OPÇÃO CAFÉ 2- Pão com requeijão", "op3": "CAFÉ OPÇÃO 3 - Pão com ovos"},
     "almoco": {"op1": "ALMOÇO/ JANTAR 1", "op2": "ALMOÇO/ JANTAR 2"}
 }
 
-def selecionar_itens(driver, wait, categoria, codigos_brutos):
-    if not codigos_brutos: return
-    logger.info(f">> Selecionando {categoria}: {codigos_brutos}")
-    lista = str(codigos_brutos).split(",")
-    for codigo in lista:
-        nome = MAPA_REFEICOES.get(categoria, {}).get(codigo.strip().lower())
-        if not nome: continue
+# --- SELECTION FUNCTION (VIDEO LOGIC) ---
+def select_items(driver, wait, category, raw_codes):
+    if not raw_codes: return
+    logger.info(f">> Selecting {category}: {raw_codes}")
+    
+    code_list = str(raw_codes).split(",")
+    for code in code_list:
+        name = MEAL_MAP.get(category, {}).get(code.strip().lower())
+        if not name: continue
+        
+        logger.info(f"   > Item: {name}")
         try:
-            xpath = f"//span[contains(text(), '{nome}')]"
-            elem = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, xpath)))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+            # 1. Find text to locate the card
+            xpath_text = f"//span[contains(text(), '{name}')]"
             
-            parent = elem.find_element(By.XPATH, "./ancestor::div[contains(@class, 'itemLista')]")
+            # Scroll modal body
+            driver.execute_script("document.querySelectorAll('.modal-body').forEach(e => e.scrollTop = e.scrollHeight)")
+            time.sleep(0.5)
+
+            elem_text = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, xpath_text)))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem_text)
+            
+            # 2. CLICK ON THE CARD (Video Logic: Click on the container, not just text)
+            # Looks for the parent div that acts as the card/row
+            parent = elem_text.find_element(By.XPATH, "./ancestor::div[contains(@class, 'itemLista') or contains(@class, 'card') or contains(@style, 'width')]")
             click_js(driver, parent)
-            time.sleep(0.5)
+            time.sleep(1) # Wait for "Add meal?" modal
             
-            # Confirmação genérica
-            driver.execute_script("swal.clickConfirm()")
-            time.sleep(0.5)
-        except: pass
+            # 3. CONFIRM (Using the specific HTML you provided)
+            # <div style="margin-top: 5px;" class="botao" onclick="swal.clickConfirm()">confirmar</div>
+            try:
+                btn_confirm = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
+                    (By.XPATH, "//div[contains(@class, 'botao') and contains(text(), 'confirmar')]")
+                ))
+                click_js(driver, btn_confirm)
+            except:
+                # Fallback: Standard SweetAlert
+                driver.execute_script("swal.clickConfirm()")
+            
+            time.sleep(1) # Wait for processing
+            
+        except Exception as e:
+            logger.warning(f"   ⚠️ Failed to select item '{name}': {e}")
 
 # ==============================================================================
-# 🤖 ROBÔ V46 - ADAPTAÇÃO TOTAL AOS NOVOS ELEMENTOS
+# 🤖 ROBOT V50 - FINAL CONCILIATION
 # ==============================================================================
-def executar_cadastro(usuario, senha, paciente, dados_clinicos):
-    matar_zumbis()
-    logger.info("--- ⚡ Iniciando Robô V46 (Elementos Atualizados) ---")
+def execute_registration(username, password, patient, clinical_data):
+    kill_zombies()
+    logger.info("--- ⚡ Starting Robot V50 (V46 Logic + Video Favorites) ---")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -112,187 +135,189 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
     driver = webdriver.Chrome(options=chrome_options)
     driver.set_page_load_timeout(120)
     wait = WebDriverWait(driver, 20)
-    link_app = "Não capturado"
+    app_link = "Not captured"
 
     try:
         # 1. LOGIN
         driver.get("https://pt.webdiet.com.br/login/")
-        wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(usuario)
-        driver.find_element(By.ID, "senhaLogin").send_keys(senha + Keys.ENTER)
+        wait.until(EC.presence_of_element_located((By.ID, "emailLogin"))).send_keys(username)
+        driver.find_element(By.ID, "senhaLogin").send_keys(password + Keys.ENTER)
         
-        # 2. CADASTRO
-        logger.info(">> Abrindo formulário...")
+        # 2. REGISTRATION (Opening Modal)
+        logger.info(">> Opening form...")
         try:
+            # Using the V46 button (Green button on Dashboard)
             btn = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@onclick, \"novoPaciente('index')\")]")))
             click_js(driver, btn)
         except:
-            raise Exception("Falha ao abrir modal.")
+            raise Exception("Failed to open modal.")
         
         time.sleep(2)
 
-        # 3. PREENCHIMENTO
-        logger.info(f">> Preenchendo: {paciente['nome']}")
-        digitar_humano(driver, "nomeAtalho", paciente['nome'])
-        try: driver.find_element(By.ID, "generoAtalho").send_keys("M" if paciente['sexo'].lower().startswith('m') else "F")
+        # 3. FILLING
+        logger.info(f">> Filling: {patient['nome']}")
+        human_typing(driver, "nomeAtalho", patient['nome'])
+        try: driver.find_element(By.ID, "generoAtalho").send_keys("M" if patient['sexo'].lower().startswith('m') else "F")
         except: pass
         
-        data_formatada = formatar_data_para_input(paciente['nascimento'])
-        digitar_humano(driver, "nascimentoAtalho", data_formatada)
-        digitar_humano(driver, "telefoneAtalho", paciente['telefone'])
-        digitar_humano(driver, "emailAtalho", paciente['email'])
+        formatted_date = format_date_for_input(patient['nascimento'])
+        human_typing(driver, "nascimentoAtalho", formatted_date)
+        human_typing(driver, "telefoneAtalho", patient['telefone'])
+        human_typing(driver, "emailAtalho", patient['email'])
 
-        # 4. SALVAR
-        logger.info(">> Salvando...")
-        btn_salvar = driver.find_element(By.ID, "novoPacienteBtnAtalho")
-        click_js(driver, btn_salvar)
+        # 4. SAVE
+        logger.info(">> Saving...")
+        btn_save = driver.find_element(By.ID, "novoPacienteBtnAtalho")
+        click_js(driver, btn_save)
         
         try:
             WebDriverWait(driver, 10).until(EC.invisibility_of_element_located((By.ID, "novoPacienteBtnAtalho")))
-            logger.info("✅ Cadastro Salvo.")
+            logger.info("✅ Registration Saved.")
         except:
-            raise Exception("Botão salvar travou.")
+            raise Exception("Save button stuck.")
 
-        # 5. MODAL "NOVA CONSULTA" (Limpeza via JS direto)
-        # Elemento 3: registrar nova consulta
-        logger.info(">> Limpando modal de transição...")
+        # 5. TRANSITION MODAL (HTML 3 from your list)
+        logger.info(">> Transition...")
         time.sleep(2)
+        # HTML 3: <div ... onclick="swal.clickConfirm()">registrar nova consulta</div>
+        # We execute JS directly as requested in V46
         driver.execute_script("if(typeof swal !== 'undefined') { swal.clickConfirm(); }")
         time.sleep(2)
 
-        # 6. BUSCA POR TELEFONE
-        logger.info(">> Buscando por Telefone...")
+        # 6. SEARCH BY PHONE (V46/V48 Logic - Safest)
+        logger.info(">> Searching by Phone...")
         try:
             driver.execute_script("swal.close(); $('.modal').modal('hide');")
             time.sleep(1)
             
             search_input = wait.until(EC.element_to_be_clickable((By.ID, "barraBuscaPaciente")))
             search_input.clear()
-            search_input.send_keys(paciente['telefone'])
+            search_input.send_keys(patient['telefone'])
             time.sleep(1)
             search_input.send_keys(Keys.ENTER)
             
-            logger.info("   > Clicando no paciente...")
-            linha_paciente = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".pacienteLinha")))
-            click_js(driver, linha_paciente)
+            logger.info("   > Clicking on patient...")
+            patient_row = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".pacienteLinha")))
+            click_js(driver, patient_row)
             
-            logger.info("   > Aguardando perfil...")
+            logger.info("   > Waiting for profile...")
             wait.until(EC.presence_of_element_located((By.ID, "atalhoPlanejamento")))
-            logger.info("✅ Perfil carregado.")
+            logger.info("✅ Profile loaded.")
 
         except Exception as e:
-            raise Exception(f"Falha ao entrar no perfil: {e}")
+            raise Exception(f"Failed to enter profile: {e}")
 
-        # 7. PLANEJAMENTO (Elemento 4)
-        logger.info(">> Iniciando Fluxo de Dieta...")
+        # 7. PLANNING FLOW (Using HTML 4, 5b1, 5b2)
+        logger.info(">> Starting Diet Flow...")
         driver.execute_script("document.body.style.zoom='70%'")
         time.sleep(2)
         
         try:
-            # Elemento 4: atalhoPlanejamento
+            # HTML 4: atalhoPlanejamento
             btn_add = driver.find_element(By.ID, "atalhoPlanejamento")
             click_js(driver, btn_add)
-            logger.info("   > Clicado em 'Adicionar Planejamento'")
             time.sleep(3)
             
-            # Elemento 5 b1: Avançar
-            logger.info("   > Avançar...")
+            # HTML 5 b1: Avançar
             try:
-                # Tenta achar botão com classe 'botao' e texto 'avançar'
-                btn_avancar = driver.find_element(By.XPATH, "//div[contains(@class, 'botao') and contains(text(), 'avançar')]")
-                click_js(driver, btn_avancar)
+                btn_next = driver.find_element(By.XPATH, "//div[contains(@class, 'botao') and contains(text(), 'avançar')]")
+                click_js(driver, btn_next)
             except:
-                driver.execute_script("swal.clickConfirm()") # Fallback
+                driver.execute_script("swal.clickConfirm()") 
             time.sleep(3)
             
-            # Elemento 5 b2: Confirmar (Criar)
-            logger.info("   > Confirmar (Criar)...")
+            # HTML 5 b2: Confirmar (Criar)
             try:
-                # ID criarPlanejamento
-                btn_criar = driver.find_element(By.ID, "criarPlanejamento")
-                click_js(driver, btn_criar)
+                btn_create = driver.find_element(By.ID, "criarPlanejamento")
+                click_js(driver, btn_create)
             except:
-                driver.execute_script("swal.clickConfirm()") # Fallback
+                driver.execute_script("swal.clickConfirm()") 
             
-            # Aguarda tela de edição carregar
             time.sleep(5)
             
         except Exception as e:
-            raise Exception(f"Erro na abertura da dieta: {e}")
+            raise Exception(f"Error opening diet: {e}")
 
-        # 8. CAPTURA LINK (Elemento 13 na lógica antiga)
+        # 8. CAPTURE LINK
         try:
             link_elem = driver.find_element(By.XPATH, "//*[contains(text(), 'paciente.me/')]")
-            link_app = link_elem.text.strip()
-            logger.info(f"✅ LINK: {link_app}")
+            app_link = link_elem.text.strip()
+            logger.info(f"✅ LINK: {app_link}")
         except: pass
 
-        # 9. LIMPEZA DE HÁBITOS (Elemento 6)
-        logger.info(">> Limpando hábitos...")
+        # 9. CLEAR HABITS (Using HTML 6 logic)
+        logger.info(">> Clearing habits...")
         try:
-            # Procura ícone lixeira (fi-sr-trash) dentro de onclick excluir(0) ou similar
-            # Usando seletor mais genérico para garantir: qualquer i com a classe trash
-            lixeiras = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
-            
-            # Limita a 5 tentativas de limpeza para não ficar loop infinito
+            # Limit to 5 attempts
             for _ in range(5):
-                lixeiras = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
-                if not lixeiras: break
+                # HTML 6: Lixeira (class btnAtalhos or i.fi-sr-trash)
+                trash_cans = driver.find_elements(By.CSS_SELECTOR, "i.fi-sr-trash")
+                if not trash_cans: break
                 
-                # Clica na primeira lixeira visível
-                click_js(driver, lixeiras[0])
-                time.sleep(0.5)
+                click_js(driver, trash_cans[0])
+                time.sleep(0.8)
                 
-                # Confirma no botão vermelho (Elemento 6 confirmação)
-                # Procura botão vermelho ou usa swal.clickConfirm()
+                # HTML 6: Confirmação (class botao background vermelho)
                 try:
                     btn_remove = driver.find_element(By.XPATH, "//div[contains(@style, 'var(--vermelho)')]")
                     click_js(driver, btn_remove)
                 except:
                     driver.execute_script("swal.clickConfirm()")
                 
-                time.sleep(0.5)
+                time.sleep(1)
         except Exception as e: 
-            logger.warning(f"Erro menor na limpeza: {e}")
+            logger.warning(f"Clearing error: {e}")
 
-        # 10. FAVORITOS
-        logger.info(">> Inserindo favoritos...")
+        # 10. FAVORITES (VIDEO LOGIC + HTML 2)
+        logger.info(">> Inserting favorites...")
         driver.execute_script("window.scrollTo(0, 0);")
+        
+        # Click on "Refeições Favoritas" button
         click_js(driver, WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div[onclick*='verRefeicoesProntas']"))))
+        logger.info("   > Favorites list open.")
         time.sleep(3)
         
-        selecionar_itens(driver, wait, "cafe", dados_clinicos.get("cafe"))
-        selecionar_itens(driver, wait, "almoco", dados_clinicos.get("almoco"))
+        # Select items using Video Logic (Click Card -> Confirm)
+        select_items(driver, wait, "cafe", clinical_data.get("cafe"))
+        select_items(driver, wait, "almoco", clinical_data.get("almoco"))
         
-        try: driver.execute_script("document.querySelector('button.close[data-dismiss=\"modal\"]').click()")
-        except: driver.execute_script("document.querySelector('.modal-backdrop').click()")
+        # Close Modal (HTML 3)
+        logger.info("   > Closing favorites...")
+        try: 
+            # HTML 3: <button class="close" ... data-dismiss="modal">
+            btn_close = driver.find_element(By.CSS_SELECTOR, "button.close[data-dismiss='modal']")
+            click_js(driver, btn_close)
+        except: 
+            # Fallback
+            driver.execute_script("document.querySelector('.modal-backdrop').click()")
         
-        # 11. FINALIZAÇÃO (Elemento 7)
-        logger.info(">> Finalizando...")
+        # 11. FINALIZE (HTML 7)
+        logger.info(">> Finalizing...")
         try:
             driver.execute_script("document.getElementById('horarioRotinaTemp0').value = '08:00';")
             driver.execute_script("document.getElementById('horarioRotinaTemp1').value = '12:00';")
         except: pass
         
         time.sleep(1)
-        # Elemento 7: salvarPrescricao()
+        # HTML 7: salvarPrescricao()
         try:
             btn_final = driver.find_element(By.XPATH, "//div[contains(@onclick, 'salvarPrescricao()')]")
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_final)
             time.sleep(1)
             click_js(driver, btn_final)
         except:
-            # Fallback classe botao e texto salvar
+            # Fallback
             btn_final_alt = driver.find_element(By.XPATH, "//div[contains(text(), 'salvar alterações')]")
             click_js(driver, btn_final_alt)
         
-        logger.info("✅ SUCESSO TOTAL!")
-        enviar_webhook("Sucesso Total", "Concluido", link_app)
-        return {"status": "sucesso", "link": link_app}
+        logger.info("✅ TOTAL SUCCESS!")
+        send_webhook("Success Total", "Completed", app_link)
+        return {"status": "success", "link": app_link}
 
     except Exception as e:
-        logger.error(f"❌ ERRO FATAL: {e}")
-        enviar_webhook(f"Erro: {str(e)}", "Erro")
-        return {"status": "erro", "msg": str(e)}
+        logger.error(f"❌ FATAL ERROR: {e}")
+        send_webhook(f"Error: {str(e)}", "Error")
+        return {"status": "error", "msg": str(e)}
     finally:
         try: driver.quit()
         except: pass
@@ -302,23 +327,23 @@ def executar_cadastro(usuario, senha, paciente, dados_clinicos):
 # ==============================================================================
 app = FastAPI()
 
-class DadosPaciente(BaseModel):
+class PatientData(BaseModel):
     nome: str
     sexo: str
     email: str
     telefone: str
     nascimento: str
 
-class PedidoCadastro(BaseModel):
-    paciente: DadosPaciente
+class RegistrationRequest(BaseModel):
+    paciente: PatientData
     dados_clinicos: Optional[Dict[str, Any]] = {}
 
 @app.post("/cadastrar-paciente")
-def api_cadastrar(pedido: PedidoCadastro, background_tasks: BackgroundTasks):
-    matar_zumbis()
-    usuario, senha = ler_credenciais()
-    background_tasks.add_task(executar_cadastro, usuario, senha, pedido.paciente.dict(), pedido.dados_clinicos)
-    return {"mensagem": "Processando...", "paciente": pedido.paciente.nome}
+def api_register(request: RegistrationRequest, background_tasks: BackgroundTasks):
+    kill_zombies()
+    username, password = read_credentials()
+    background_tasks.add_task(execute_registration, username, password, request.paciente.dict(), request.dados_clinicos)
+    return {"message": "Processing...", "patient": request.paciente.nome}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
